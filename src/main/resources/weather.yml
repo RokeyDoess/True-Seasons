@@ -1,0 +1,20 @@
+# Probabilities adjust naturally starting rain/thunder. Saved biome climate is untouched.
+enabled: true
+winter-storm:
+  # Hold a snowstorm throughout the winter world migration, including pauses.
+  # Restore the previous world weather once terrain migration completes.
+  start-on-winter: true
+snowfall:
+  # All winter rain/thunder uses Minecraft's native snow renderer.
+  # Client-only cold biome aliases leave saved biomes unchanged. Clear weather stays clear.
+  enabled: true
+rain-acceptance:
+  spring: 1.0
+  summer: 0.65
+  autumn: 0.9
+  winter: 0.8
+thunder-acceptance:
+  spring: 0.5
+  summer: 0.65
+  autumn: 0.85
+  winter: 0.2

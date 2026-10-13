@@ -1,0 +1,17 @@
+# Only normal/overworld dimensions are eligible. Empty list includes all overworlds.
+worlds: []
+migration:
+  enabled: true
+  # Async loads in flight, shared by migration and cleanup.
+  max-concurrent-chunks: 2
+  # Limit application work as well as concurrent loading.
+  max-chunks-per-tick: 1
+  max-millis-per-tick: 3.0
+  pause-below-tps: 18.5
+  prioritize-player-chunks: true
+  # Square radius: 4 means a 9x9 area, nearest rings first. No missing chunks are generated.
+  player-radius-chunks: 4
+  # Read region headers again periodically to include externally generated chunks.
+  rescan-seconds: 300
+  # Informational invariant: True Seasons never offers generation-enabled loads.
+  generate-missing-chunks: false

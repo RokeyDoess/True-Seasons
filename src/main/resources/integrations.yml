@@ -1,0 +1,7 @@
+bluemap:
+  enabled: true
+  # Render bounded region batches only after final chunk revisions are readable on disk.
+  # Pending regions remain queued until every configured map finishes and saves its update.
+  flush-seconds: 30
+  max-regions-per-flush: 1
+# Distant Horizons is intentionally reserved for a future separate adapter.

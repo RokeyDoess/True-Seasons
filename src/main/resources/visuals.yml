@@ -1,0 +1,29 @@
+# Shared resolver for future client presentation and integration adapters.
+# This first build exposes palettes but does not yet send tinted biome packets.
+# Vanilla saved biome IDs remain untouched.
+families:
+  evergreen: [taiga, grove]
+  dry: [savanna, desert, badlands]
+  lush: [jungle, swamp, mangrove]
+# Hex RGB grass / foliage, by season and family. Unmatched biomes use temperate.
+palettes:
+  temperate:
+    spring: ['83B957', '68AE48']
+    summer: ['73A64B', '4C913D']
+    autumn: ['9C9657', 'D98637']
+    winter: ['A2ADA0', '859687']
+  evergreen:
+    spring: ['729A68', '4E805D']
+    summer: ['678D60', '3E7150']
+    autumn: ['7D8961', '527151']
+    winter: ['8C9E95', '647E70']
+  dry:
+    spring: ['B5B769', 'A6A256']
+    summer: ['B3AA5B', '9C964D']
+    autumn: ['AAA166', 'A09958']
+    winter: ['AFAB88', '9A9875']
+  lush:
+    spring: ['65AD4C', '49A43F']
+    summer: ['55933F', '398B32']
+    autumn: ['789447', '77983F']
+    winter: ['8CA585', '779574']

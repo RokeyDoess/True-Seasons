@@ -1,0 +1,8 @@
+# IANA time zone. Explicit zone prevents the host's clock settings changing seasons.
+timezone: America/Los_Angeles
+# Each month must appear exactly once. Each season must occupy consecutive months.
+months:
+  spring: [3, 4, 5]
+  summer: [6, 7, 8]
+  autumn: [9, 10, 11]
+  winter: [12, 1, 2]

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # True Seasons — first v1 development build
 
 Paper **26.3**, Java **25**, plugin version **0.1.4**. This is a working migration/snow milestone, not the finished v1 visual feature set.
@@ -100,3 +101,7 @@ Obtain `dev.trueseasons.api.TrueSeasonsApi` through Bukkit's `ServicesManager`; 
 The probe jar is a test-only fixture editor and must never be installed on your normal server. The verifier intentionally refuses to overwrite an existing verification folder. Rename an old run within `run` before starting a fresh one. Per-cycle logs and the result file stay in the verification folder for inspection.
 
 After the main verifier passes, `verify-final-map.ps1` exercises the final tile/save barrier against actual map storage. Then `verify-optional.ps1` runs the saved-world revalidation with BlueMap absent in that same clone. See [validation details](docs/VALIDATION.md) for the completed checks and their limits.
+=======
+# True-Seasons
+A Papermc plugin
+>>>>>>> 9a66c9075ef0fa05a560678555b379b939380655

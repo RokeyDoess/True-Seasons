@@ -67,7 +67,7 @@ public final class WinterGroundCoverTests {
                 case "canPlace" -> {
                     BlockData planned=(BlockData)a[0]; Material below=terrain.getOrDefault(cell-1,data("minecraft:air")).getMaterial();
                     yield planned instanceof Bisected half && half.getHalf()==Bisected.Half.TOP
-                            ? below==planned.getMaterial() : below==Material.GRASS_BLOCK;
+                            ? below==planned.getMaterial() : below==Material.GRASS_BLOCK || below==Material.DIRT || below==Material.MYCELIUM;
                 }
                 case "setType", "setBlockData" -> {
                     check(intent > 0 && metadata.containsKey(key), "Journal intent and snapshot precede every edit");
@@ -119,6 +119,17 @@ public final class WinterGroundCoverTests {
         f=new Fixture("minecraft:poppy"); f.hide(65); f.cover.edited(f.block(70));
         check(f.cover.hasMetadata(f.chunk),"Unrelated higher edit preserves exact backup");
         f.terrain.put(64,data("minecraft:stone")); check(f.restore().conflicts()==1 && f.cover.hasMetadata(f.chunk),"Changed support is retained as a recoverable conflict");
+        for (String original : List.of("dirt", "grass_block", "mycelium")) {
+            for (String current : List.of("dirt", "grass_block", "mycelium")) {
+                if (original.equals(current)) continue;
+                f=new Fixture("minecraft:pink_petals[facing=west,flower_amount=4]");
+                f.terrain.put(64,data("minecraft:"+original)); f.hide(65);
+                f.terrain.put(64,data("minecraft:"+current));
+                var restored=f.restore();
+                check(restored.restored()==1 && restored.conflicts()==0 && !f.cover.hasMetadata(f.chunk),"Natural soil conversion restores plants: "+original+" -> "+current);
+                check(f.at(64).equals("minecraft:"+current) && f.at(65).equals("minecraft:pink_petals[facing=west,flower_amount=4]"),"Restoration preserves current soil and exact petal properties");
+            }
+        }
         f=new Fixture("minecraft:poppy"); f.hide(65); f.terrain.put(65,data("minecraft:snow"));
         check(f.restore().conflicts()==1 && f.at(65).contains("snow") && f.cover.hasMetadata(f.chunk),"Unresolved snow is not replaced with plants");
         f=new Fixture("minecraft:poppy"); f.failY=65;

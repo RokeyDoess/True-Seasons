@@ -45,6 +45,20 @@ public final class WinterGroundCoverRuntimeProbe {
             if(intent[0]!=1||result.removed()!=1||result.placed()!=1||lower.getType()!=Material.SNOW)throw new AssertionError("Ground cover becomes real snow in the same step"); checks++;
             GroundCoverColumns decoded=GroundCoverColumns.decode(pdc.get(plants,PersistentDataType.BYTE_ARRAY));
             if(decoded.get(column)==null||!decoded.get(column).lower().equals(exact))throw new AssertionError("Exact litter properties are durable");checks++;
+            // Dirt below hidden petals can become grass while its region waits.
+            // Restoration must retain that natural terrain change and retire the backup.
+            snow.applyStep(chunk,Season.SPRING,"cover-runtime-soil-baseline",false,256,()->{});
+            support.setType(Material.DIRT,false);
+            lower.setBlockData(Bukkit.createBlockData("minecraft:pink_petals[facing=west,flower_amount=4]"),false);
+            String petals=lower.getBlockData().getAsString();
+            snow.applyStep(chunk,Season.WINTER,"cover-runtime-soil-winter",false,256,()->{});
+            if(!pdc.has(plants)||lower.getType()!=Material.SNOW)throw new AssertionError("Petals on dirt are backed up beneath real snow");checks++;
+            support.setBlockData(Bukkit.createBlockData("minecraft:grass_block[snowy=true]"),false);
+            result=snow.applyStep(chunk,Season.SPRING,"cover-runtime-soil-spring",false,256,()->{});
+            if(!result.complete()||result.conflicts()!=0||!lower.getBlockData().getAsString().equals(petals)||pdc.has(plants)||pdc.has(owned))throw new AssertionError("Natural dirt-to-grass conversion must not stall spring restoration");checks++;
+            if(support.getType()!=Material.GRASS_BLOCK)throw new AssertionError("Restoring petals must preserve the current grass support");checks++;
+            lower.setBlockData(Bukkit.createBlockData(exact),false);
+            snow.applyStep(chunk,Season.WINTER,stamp,false,1,()->{});
             result=snow.applyStep(chunk,Season.AUTUMN,"cover-runtime-autumn",false,256,()->{});
             if(!result.complete()||!lower.getBlockData().getAsString().equals(exact)||pdc.has(plants)||pdc.has(owned))throw new AssertionError("Interrupted winter exits to autumn and restores exact cover");checks++;
             // Restart a fresh one-column winter, then exercise actual paired plant placement checks.

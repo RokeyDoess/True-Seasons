@@ -140,10 +140,18 @@ final class WinterGroundCover {
         return !air(block.getType()) && !block.getBlockData().getAsString().equals(original.getAsString());
     }
     private static boolean sameSupport(BlockData actual, BlockData original) {
+        // Grass/mycelium can spread onto dirt while a plant is hidden. Keep the
+        // current ground and let canPlace validate the plant instead of blocking
+        // an entire region on this natural change. Other supports stay exact.
+        if (naturalSoil(actual.getMaterial()) && naturalSoil(original.getMaterial())
+                && actual.getMaterial() != original.getMaterial()) return true;
         if (actual instanceof Snowable a && original instanceof Snowable o) {
             actual = a.clone(); original = o.clone(); ((Snowable) actual).setSnowy(false); ((Snowable) original).setSnowy(false);
         }
         return actual.getAsString().equals(original.getAsString());
+    }
+    private static boolean naturalSoil(Material material) {
+        return material == Material.DIRT || material == Material.GRASS_BLOCK || material == Material.MYCELIUM;
     }
     void edited(Block block) {
         Chunk chunk = block.getChunk(); if (!hasMetadata(chunk)) return;

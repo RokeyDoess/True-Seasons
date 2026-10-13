@@ -42,13 +42,13 @@ foreach ($taskTestMain in @('dev.trueseasons.migration.MigrationBookkeepingTests
 $taskNms = Join-Path $taskServer 'versions/26.3/paper-26.3.jar'
 & (Join-Path $JdkDirectory 'bin/java.exe') '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.NativeSnowPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Native snow packet tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.7.jar'
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.8.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
 if ($Install) {
     foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'TrueSeasons-*.jar') {
-        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.7.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.8.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
     }
-    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.7.jar') -Force
+    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.8.jar') -Force
 }
 Write-Output "Built and verified: $taskJar"

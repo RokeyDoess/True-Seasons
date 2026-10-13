@@ -4,7 +4,7 @@ Calendar seasons and reversible winter snow for Paper servers.
 
 True Seasons brings Minecraft's native snowfall to winter and adds snow to exposed terrain, roofs and leaf canopies. Exposed grass, flowers and leaf litter disappear beneath the snow and return when winter ends.
 
-**Development release: 0.1.7.** Winter snow and weather are available. Seasonal grass and leaf colors are still in development.
+**Development release: 0.1.8.** Winter snow and weather are available. Seasonal grass and leaf colors are still in development.
 
 ## Features
 

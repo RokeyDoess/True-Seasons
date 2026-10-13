@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8
+
+- Fix spring restoration getting stuck when dirt beneath saved plants naturally becomes grass or mycelium. Restore plants without changing the current ground.
+
 ## 0.1.7
 
 - Finish one region before moving to the next. Player movement no longer scatters seasonal updates across the world.

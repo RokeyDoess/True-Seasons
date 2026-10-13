@@ -27,9 +27,9 @@ enable-query=false
 max-players=1
 '@)
 foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -Filter 'TrueSeasons-*.jar') {
-    if ($taskOldJar.Name -ne 'TrueSeasons-0.1.4.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+    if ($taskOldJar.Name -ne 'TrueSeasons-0.1.5.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.4.jar') -Destination (Join-Path $taskRun 'plugins')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.5.jar') -Destination (Join-Path $taskRun 'plugins')
 $taskProbe = Join-Path $PSScriptRoot 'build/probe'
 New-Item -ItemType Directory -Force -Path $taskProbe | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbe 'plugin.yml'), @'

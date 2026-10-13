@@ -12,6 +12,11 @@ transition:
   enabled: true
   columns-per-step: 16
   step-ticks: 5
+replenishment:
+  # Let players dig after breaking snow. Rain resumes ordinary random snowfall
+  # in that horizontal column after this grace period; expiry never forces a refill.
+  # Applies through clear weather, pauses and chunk unloads. 0 disables the grace.
+  player-break-cooldown-seconds: 60
 # Cancel vanilla accumulation onto owned snow, avoiding layers we cannot restore.
 # Snow that melts or is edited loses ownership; player replacements remain intact.
 protect-owned-layers: true

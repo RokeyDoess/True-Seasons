@@ -52,6 +52,8 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
                 && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean);
             Bukkit.getPluginManager().registerEvents(weather, this);
             replenishment = new SnowReplenishmentService(this,snow,this::settings,this::version,
+                world -> season==Season.WINTER&&eligible(world)&&!state.cleanup&&!state.clean
+                    &&settings.enabled&&settings.snow&&settings.weather&&settings.winterSnowfall,
                 world -> season==Season.WINTER&&eligible(world)&&!state.cleanup&&!state.clean&&!state.paused
                     &&settings.enabled&&settings.snow&&settings.weather&&settings.winterSnowfall&&world.hasStorm()
                     &&engine.worldFinished(world)&&engine.currentTps()>=settings.minTps,

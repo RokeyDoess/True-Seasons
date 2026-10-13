@@ -1,3 +1,10 @@
+# 0.1.5
+
+- Let players clear snow without an immediate refill. Replace the broken-snow priority queue with a configurable grace period, defaulting to 60 seconds, before ordinary winter snowfall may replenish that column.
+- Apply the same grace to random refill, direct refill and native snow formation. Keep it across clear weather, pauses and chunk unload/reload; preserve explicit player placement and ignore canceled breaks.
+- Bound cooldown memory and expiration work; add monotonic-clock and real Paper block/event regressions.
+- Rewrite the README for server owners: packaged installation, configuration, commands, permissions, map updates, clean removal and current feature limits. Remove merge-conflict markers and development build instructions.
+
 # 0.1.4
 
 - Use colored native chat components for administration messages, with a Migration status header, cyan progress/coverage, distinct TPS colors and highlighted map/deferred counts.

@@ -7,7 +7,10 @@ foreach ($taskFile in @('bluemap-5.29-paper.jar','bmm-paper-2.1.19.jar')) {
     $taskPath = Join-Path $taskRun "plugins/$taskFile"
     if (Test-Path -LiteralPath $taskPath) { Rename-Item -LiteralPath $taskPath -NewName "$taskFile.disabled" }
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.4.jar') -Destination (Join-Path $taskRun 'plugins') -Force
+foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -Filter 'TrueSeasons-*.jar') {
+    if ($taskOldJar.Name -ne 'TrueSeasons-0.1.5.jar') { Rename-Item -LiteralPath $taskOldJar.FullName -NewName ($taskOldJar.Name + '.disabled') -Force }
+}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.5.jar') -Destination (Join-Path $taskRun 'plugins') -Force
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' (Join-Path $taskRun 'plugins/TrueSeasonsVerification.jar') '-C' (Join-Path $PSScriptRoot 'build/test-classes') '.' '-C' (Join-Path $PSScriptRoot 'build/probe') 'plugin.yml'
 if ($LASTEXITCODE -ne 0) { throw 'Probe packaging failed' }
 $taskStart = [System.Diagnostics.ProcessStartInfo]::new()

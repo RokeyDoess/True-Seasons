@@ -1,5 +1,17 @@
 # Development build validation — October 12, 2026
 
+## 0.1.5
+
+The standalone build passed **1,230 assertions**, including the previous 1,095 checks and **135 new snow-break cooldown checks**. These exercise exact expiry, repeated breaks, world/column isolation, clear-weather eligibility, canceled/non-snow breaks, native snow formation, random/direct filtering, the post-event commit guard, zero configuration, monotonic clock wraparound and bounded cache maintenance.
+
+The immediate broken-snow queue is removed. The default 60-second grace protects the horizontal column, so digging lower does not evade it. A spot becomes eligible for ordinary sampling after expiry; expiry schedules no forced refill. Native snow-formation events share the cooldown, and explicit player placement remains available. The cache holds at most 65,536 columns, reclaims expired records within bounded work and can evict older active records under exceptional capacity pressure. Cooldowns survive chunk unload/reload during one plugin instance; they are not persisted across a server restart.
+
+The README was rewritten for GitHub visitors installing and operating the plugin. It documents the shipped settings and permissions, tested compatibility and current feature limits, and removes existing merge-conflict markers.
+
+The focused real-Paper probe passed **13 checks**: adding the cooldown default to existing settings, verified sky lighting/support, a clear-weather break followed by rain, ordinary random sampling, digging to a lower surface, native block-form cancellation, exact expiry, retained ownership, repeated breaks, canceled breaks and zero new terrain. It uses an injected monotonic clock and a separate service on an already loaded fixture; it does not simulate a connected player's client interaction or repeat the unchanged full-world migration/BlueMap suite. Paper's test-plugin isolation and asynchronous lighting were accounted for in the fixture. Results are in `run/verification/snow-cooldown.log` and `snow-cooldown-result.txt`; the driver is `verify-snow-cooldown.ps1`.
+
+Version 0.1.5 was installed in the stopped original test server after verification. Its SHA-256 is `DFBC1A91A90DCCD07E2867B4685A08E01A78921D24957E27222738B2026186CA`. The previous jar and plugin data were backed up under `run/original-state-before-0.1.5`; the original world was not started or edited. Background migration ordering and BlueMap render scheduling were reviewed but not changed in this build.
+
 ## 0.1.4
 
 Environment: Java 25.0.4.1, Paper 26.3 build 177 and BlueMap 5.29. Only disposable copies of the test server are started during validation.

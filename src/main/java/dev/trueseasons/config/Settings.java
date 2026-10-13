@@ -14,7 +14,7 @@ public final class Settings {
     public final SeasonCalendar calendar;
     public final Set<String> worlds;
     public final int concurrency, perTick, rescanSeconds, blueMapSeconds, blueMapRegions;
-    public final int playerRadius, snowStepColumns, snowStepTicks;
+    public final int playerRadius, snowStepColumns, snowStepTicks, snowPlayerBreakCooldownSeconds;
     public final double minTps, millis;
     public final boolean enabled, prioritize, snow, protectSnow, weather, blueMap;
     public final boolean allExposed, snowTransition, winterStorm, winterSnowfall;
@@ -56,6 +56,7 @@ public final class Settings {
         snowTransition = sn.getBoolean("transition.enabled", true);
         snowStepColumns = bounded(sn.getInt("transition.columns-per-step", 16), 1, 256);
         snowStepTicks = bounded(sn.getInt("transition.step-ticks", 5), 1, 200);
+        snowPlayerBreakCooldownSeconds = bounded(sn.getInt("replenishment.player-break-cooldown-seconds", 60), 0, 86400);
         protectSnow = sn.getBoolean("protect-owned-layers", true);
         surfaces = EnumSet.noneOf(Material.class);
         for (String name : sn.getStringList("surface-materials")) {

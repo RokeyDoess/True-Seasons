@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.1.6"
+version = "0.1.7"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -25,6 +25,10 @@ tasks.check { dependsOn("coreTest") }
 listOf(
     "migrationTest" to "dev.trueseasons.migration.MigrationBookkeepingTests",
     "regionReadinessTest" to "dev.trueseasons.migration.RegionReadinessTests",
+    "regionOrderTest" to "dev.trueseasons.migration.RegionOrderTests",
+    "indexHydrationTest" to "dev.trueseasons.migration.IndexHydrationBudgetTests",
+    "climateTest" to "dev.trueseasons.climate.SeasonClimateTests",
+    "groundCoverTest" to "dev.trueseasons.snow.WinterGroundCoverTests",
     "generatedSnapshotTest" to "dev.trueseasons.migration.GeneratedChunkSnapshotTests",
     "winterCoverageTest" to "dev.trueseasons.migration.WinterCoveragePolicyTests",
     "commandPresentationTest" to "dev.trueseasons.command.CommandPresentationTests",

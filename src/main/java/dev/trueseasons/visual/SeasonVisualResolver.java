@@ -1,6 +1,7 @@
 package dev.trueseasons.visual;
 
 import dev.trueseasons.api.*;
+import dev.trueseasons.climate.SeasonClimatePolicy;
 import java.util.*;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -8,7 +9,12 @@ import org.bukkit.configuration.file.YamlConfiguration;
 public final class SeasonVisualResolver {
     private final Map<String, List<String>> families = new LinkedHashMap<>();
     private final Map<String, Map<Season, SeasonVisualProfile>> palettes = new HashMap<>();
+    private final SeasonClimatePolicy climate;
     public SeasonVisualResolver(YamlConfiguration config) {
+        this(config, SeasonClimatePolicy.ALL);
+    }
+    public SeasonVisualResolver(YamlConfiguration config, SeasonClimatePolicy climate) {
+        this.climate = Objects.requireNonNull(climate);
         var section = config.getConfigurationSection("families");
         if (section != null) for (String family : section.getKeys(false)) families.put(family, section.getStringList(family));
         Set<String> names = new LinkedHashSet<>(families.keySet()); names.add("temperate");
@@ -31,6 +37,6 @@ public final class SeasonVisualResolver {
         for (var entry : families.entrySet()) if (entry.getValue().stream().anyMatch(biomeKey::contains)) {
             family = entry.getKey(); break;
         }
-        return palettes.get(family).get(season);
+        return palettes.get(family).get(climate.paletteSeason(season, biomeKey));
     }
 }

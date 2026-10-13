@@ -1,22 +1,23 @@
 enabled: true
 # One layer on EVERY sky-exposed surface that supports vanilla snow: roofs,
-# leaves, terrain, etc. Never overwrite existing snow, fluids or occupied blocks.
-# Non-supporting shapes and vegetation cannot hold a vanilla snow layer.
+# leaves, terrain, etc. Preserve existing snow, fluids and player replacements.
+# Eligible exposed ground cover is saved and temporarily removed below.
 surface-mode: all-exposed
 # Used only when surface-mode is explicitly set to whitelist.
 surface-materials: [GRASS_BLOCK, DIRT, COARSE_DIRT, PODZOL, MYCELIUM, ROOTED_DIRT, MOSS_BLOCK, STONE, ANDESITE, DIORITE, GRANITE, GRAVEL]
 # Biome names are matched against the Minecraft registry key.
 excluded-biome-fragments: []
-transition:
-  # Near-player chunks fill in scattered columns; remote chunks update in one pass.
+ground-cover:
+  # Temporarily remove exposed grass, flowers and leaf litter during winter.
+  # Exact plants are restored on leaving winter if the destination/support is unchanged.
+  # Saplings, leaves and crops stay. Existing backups restore even when disabled.
   enabled: true
-  columns-per-step: 16
-  step-ticks: 5
 replenishment:
   # Let players dig after breaking snow. Rain resumes ordinary random snowfall
   # in that horizontal column after this grace period; expiry never forces a refill.
   # Applies through clear weather, pauses and chunk unloads. 0 disables the grace.
   player-break-cooldown-seconds: 60
 # Cancel vanilla accumulation onto owned snow, avoiding layers we cannot restore.
-# Snow that melts or is edited loses ownership; player replacements remain intact.
+# If disabled, natural melting releases snow ownership but keeps saved plants.
+# Player replacements remain intact.
 protect-owned-layers: true

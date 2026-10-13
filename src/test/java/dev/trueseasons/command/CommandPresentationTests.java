@@ -129,7 +129,7 @@ public final class CommandPresentationTests {
                 NamedTextColor color=action.equals("pause")?NamedTextColor.YELLOW:NamedTextColor.GREEN;
                 check(messages.size()==1 && plain(messages.getFirst()).startsWith("Migration status")
                         && plain(messages.getFirst()).endsWith(feedback) && colored(messages.getFirst(),feedback,color),
-                        "Pause and resume acknowledgments have the requested Migration status separator and clear feedback: "
+                        "Pause and resume acknowledgments have a Migration status separator and clear feedback: "
                                 +messages.stream().map(CommandPresentationTests::plain).toList());
                 check(state.paused==action.equals("pause") && Files.readString(confirmationDirectory.resolve("jobs.yml")).contains("paused: "+state.paused),
                         "Pause and resume feedback corresponds to the persisted migration state");

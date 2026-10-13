@@ -3,3 +3,18 @@
 /run/
 /.idea/
 *.iml
+
+# Local server output and profiler captures
+/logs/
+*.log
+*.log.gz
+*.sparkprofile
+*.jfr
+*.hprof
+__pycache__/
+*.pyc
+
+# Local development notes and analysis
+/docs/profile/
+/docs/INITIAL_BRIEF.md
+/docs/VALIDATION.md

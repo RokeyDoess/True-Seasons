@@ -2,6 +2,7 @@ package dev.trueseasons.config;
 
 import dev.trueseasons.api.Season;
 import dev.trueseasons.calendar.SeasonCalendar;
+import dev.trueseasons.climate.SeasonClimatePolicy;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneId;
@@ -17,7 +18,8 @@ public final class Settings {
     public final int playerRadius, snowStepColumns, snowStepTicks, snowPlayerBreakCooldownSeconds;
     public final double minTps, millis;
     public final boolean enabled, prioritize, snow, protectSnow, weather, blueMap;
-    public final boolean allExposed, snowTransition, winterStorm, winterSnowfall;
+    public final boolean allExposed, snowTransition, winterStorm, winterSnowfall, groundCover;
+    public final SeasonClimatePolicy climate;
     public final Set<Material> surfaces;
     public final List<String> excludedBiomes;
     public final YamlConfiguration weatherConfig, visuals;
@@ -50,6 +52,7 @@ public final class Settings {
         prioritize = main.getBoolean("migration.prioritize-player-chunks", true);
         playerRadius = bounded(main.getInt("migration.player-radius-chunks", 4), 0, 16);
         snow = sn.getBoolean("enabled", true);
+        groundCover = sn.getBoolean("ground-cover.enabled", true);
         String surfaceMode = sn.getString("surface-mode", "all-exposed");
         if (!List.of("all-exposed", "whitelist").contains(surfaceMode)) throw new IllegalArgumentException("Invalid snow surface-mode");
         allExposed = surfaceMode.equals("all-exposed");
@@ -72,6 +75,11 @@ public final class Settings {
             sn.set("surface-mode", "all-exposed");
             legacySnowMigrated = true;
         }
+        List<String> winterExcluded = new ArrayList<>(main.contains("climate.winter-excluded-biome-fragments")
+            ? main.getStringList("climate.winter-excluded-biome-fragments") : SeasonClimatePolicy.HOT);
+        winterExcluded.addAll(excludedBiomes);
+        climate = new SeasonClimatePolicy(winterExcluded, main.contains("climate.summer-excluded-biome-fragments")
+            ? main.getStringList("climate.summer-excluded-biome-fragments") : SeasonClimatePolicy.COLD);
         weatherConfig = files.get("weather"); weather = weatherConfig.getBoolean("enabled", true);
         winterStorm = weatherConfig.getBoolean("winter-storm.start-on-winter", true);
         boolean legacyStormTimer=weatherConfig.contains("winter-storm.duration-seconds");

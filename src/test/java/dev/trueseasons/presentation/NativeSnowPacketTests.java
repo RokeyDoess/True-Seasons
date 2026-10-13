@@ -2,6 +2,7 @@ package dev.trueseasons.presentation;
 
 import io.netty.buffer.*;
 import io.netty.channel.embedded.EmbeddedChannel;
+import dev.trueseasons.climate.SeasonClimatePolicy;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.logging.Logger;
@@ -12,7 +13,7 @@ public final class NativeSnowPacketTests {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
-        registryAndClimate(); palettesAndRefresh();
+        registryAndClimate(); palettesAndRefresh(); climateExclusions();
         System.out.println("Native snow packet tests passed: " + assertions + " assertions");
         Class.forName("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -89,6 +90,34 @@ public final class NativeSnowPacketTests {
             for (int i = 0; i < 64; i++) check(output[i] == input[i] + count, "palette shape " + distinct);
             check(Arrays.equals(nativePaletteIds(mapped, count * 2), output), "actual vanilla palette decode shape " + distinct);
         }
+        channel.finishAndReleaseAll();
+    }
+    private static void climateExclusions() throws Exception {
+        Object desert = biome(2.0f,false), jungle = biome(.95f,true), forest = biome(.7f,true), frozen = biome(-.5f,true);
+        var policy = new SeasonClimatePolicy(SeasonClimatePolicy.HOT, SeasonClimatePolicy.COLD);
+        var handler = new NativeSnowPresentation.ClimateHandler(new PaperBiomePackets(Map.of()), Logger.getAnonymousLogger(), policy);
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        channel.writeOutbound(registry(List.of(entry("minecraft:desert",Optional.of(desert)),entry("minecraft:jungle",Optional.of(jungle)),
+            entry("minecraft:forest",Optional.of(forest)),entry("minecraft:snowy_plains",Optional.of(frozen)))));
+        Object encoded = wireRoundTrip(channel.readOutbound());
+        List<?> registered = (List<?>)call(encoded,"entries");
+        check(((Optional<?>)call(registered.get(0),"data")).orElseThrow().equals(desert), "Excluded desert payload remains exactly vanilla");
+        check(((Optional<?>)call(registered.get(1),"data")).orElseThrow().equals(jungle), "Excluded jungle payload remains exactly vanilla");
+        int[] original = new int[64]; for (int i = 0; i < 64; i++) original[i] = i % 4;
+        ByteBuf packed = Unpooled.buffer(); BiomeWireCodec.writeBiomes(packed, original,4,false,4);
+        byte[] wire = new byte[packed.readableBytes()]; packed.readBytes(wire); packed.release();
+        ByteBuf section = Unpooled.buffer(); section.writeShort(0).writeShort(0).writeByte(0).writeByte(0).writeBytes(wire);
+        byte[] source = new byte[section.readableBytes()]; section.readBytes(source); section.release();
+        Object originalPacket = chunk(chunkData(source),0,0);
+        channel.writeOutbound(originalPacket); channel.readOutbound();
+        handler.setWinter(true); Object winter = channel.readOutbound(); int[] winterIds = ids(winter);
+        for (int i = 0; i < 64; i++) check(winterIds[i] == original[i] + (original[i] >= 2 ? 4 : 0), "Mixed-biome winter routing preserves hot cell " + i);
+        check(Arrays.equals(winterIds,nativeIds(winter,8)), "Vanilla decoder accepts mixed originals and winter aliases");
+        check(!((boolean)call(decodeBiome(desert),"hasPrecipitation")), "Excluded desert keeps vanilla no precipitation");
+        handler.setClimate(true,new SeasonClimatePolicy(List.of("forest"),List.of()));
+        int[] reloaded = ids(channel.readOutbound());
+        for (int i = 0; i < 64; i++) check(reloaded[i] == original[i] + (original[i] != 2 ? 4 : 0), "Policy reload refreshes cached cell " + i);
+        handler.setWinter(false); check(Arrays.equals(ids(channel.readOutbound()),original), "Season exit restores all mixed original IDs");
         channel.finishAndReleaseAll();
     }
     private static Object biome(float temperature, boolean precipitation) throws Exception {

@@ -1,32 +1,22 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Report a problem with True Seasons
 title: ''
 labels: bug
 assignees: RokeyDoess
 type: Bug
-
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+**What happened?**
+Describe the problem and what you expected instead.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+**How can we reproduce it?**
+Include the commands, season changes or actions that led to the problem.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**Server details**
+- Paper version and build:
+- True Seasons version:
+- BlueMap version, if installed:
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
-
-**Minecraft (please complete the following information):**
- - Minecraft version: [e.g. 26.3]
- - Plugin version [e.g. 0.1.5]
-
-**Additional context**
-Add any other context about the problem here.
+**Relevant output**
+Include `/ts status`, relevant errors and screenshots if helpful. Remove private information from logs before sharing them.

@@ -30,7 +30,10 @@ public final class SavedChunkRevision {
             file.seek(position); int location = file.readInt();
             if (location != 0) {
                 int sector = location >>> 8, sectors = location & 255;
-                if (sector < 2 || sectors == 0 || (long) sector * 4096 + (long) sectors * 4096 > file.length())
+                // Paper can leave unused tail padding unwritten in the final allocated
+                // sector. Presence uses rounded allocation; final proof still reads
+                // the exact payload below and rejects truncated chunk bytes.
+                if (sector < 2 || sectors == 0 || (long) sector + sectors > (file.length() + 4095) / 4096)
                     throw new IOException("Invalid region location");
                 return false;
             }

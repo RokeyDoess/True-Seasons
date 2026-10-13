@@ -72,6 +72,7 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
         try {
             seasons.state().paused = true;
             checks += SnowMigrationIntentRuntimeProbe.verify(this, seasons::settings, chunk);
+            checks += WinterGroundCoverRuntimeProbe.verify(this, seasons::settings, chunk);
             chunk.getPersistentDataContainer().set(versionKey, PersistentDataType.STRING, stamp);
             var factory = SnowReplenishmentService.class.getDeclaredConstructor(JavaPlugin.class, SeasonalSnowService.class,
                 Supplier.class, Supplier.class, java.util.function.Predicate.class, java.util.function.Predicate.class,

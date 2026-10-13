@@ -3,6 +3,7 @@ package dev.trueseasons.presentation;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.util.*;
+import java.util.function.IntPredicate;
 
 /** Paper/Minecraft 26.3 palette format: fixed-size packed longs, with no length prefix. */
 public final class BiomeWireCodec {
@@ -10,6 +11,9 @@ public final class BiomeWireCodec {
     public record ChunkData(byte[] sections, byte[] biomes) {}
 
     public static ChunkData chunk(byte[] source, int originalCount, boolean winter) {
+        return chunk(source, originalCount, winter, id -> true);
+    }
+    public static ChunkData chunk(byte[] source, int originalCount, boolean winter, IntPredicate winterBiome) {
         ByteBuf in = Unpooled.wrappedBuffer(source), out = Unpooled.buffer(), biomes = Unpooled.buffer();
         try {
             while (in.isReadable()) {
@@ -19,7 +23,7 @@ public final class BiomeWireCodec {
                 skipPalette(in, 4096, 8);
                 out.writeBytes(in, start, in.readerIndex() - start);
                 int[] ids = readBiomes(in);
-                writeBiomes(out, ids, originalCount, winter);
+                writeBiomes(out, ids, originalCount, winter, Math.multiplyExact(originalCount, 2), winterBiome);
                 writeBiomes(biomes, ids, originalCount, false, originalCount);
             }
             return new ChunkData(bytes(out), bytes(biomes));
@@ -27,9 +31,12 @@ public final class BiomeWireCodec {
     }
 
     public static byte[] biomes(byte[] source, int originalCount, boolean winter) {
+        return biomes(source, originalCount, winter, id -> true);
+    }
+    public static byte[] biomes(byte[] source, int originalCount, boolean winter, IntPredicate winterBiome) {
         ByteBuf in = Unpooled.wrappedBuffer(source), out = Unpooled.buffer();
         try {
-            while (in.isReadable()) writeBiomes(out, readBiomes(in), originalCount, winter);
+            while (in.isReadable()) writeBiomes(out, readBiomes(in), originalCount, winter, Math.multiplyExact(originalCount, 2), winterBiome);
             return bytes(out);
         } finally { in.release(); out.release(); }
     }
@@ -56,11 +63,14 @@ public final class BiomeWireCodec {
     }
 
     static void writeBiomes(ByteBuf out, int[] ids, int count, boolean winter, int registrySize) {
+        writeBiomes(out, ids, count, winter, registrySize, id -> true);
+    }
+    private static void writeBiomes(ByteBuf out, int[] ids, int count, boolean winter, int registrySize, IntPredicate winterBiome) {
         LinkedHashMap<Integer, Integer> palette = new LinkedHashMap<>();
         int[] values = new int[64];
         for (int i = 0; i < 64; i++) {
             if (ids[i] < 0 || ids[i] >= count) throw new IllegalArgumentException("Unknown original biome id " + ids[i]);
-            values[i] = ids[i] + (winter ? count : 0);
+            values[i] = ids[i] + (winter && winterBiome.test(ids[i]) ? count : 0);
             palette.computeIfAbsent(values[i], key -> palette.size());
         }
         if (palette.size() == 1) { out.writeByte(0); writeVarInt(out, values[0]); return; }

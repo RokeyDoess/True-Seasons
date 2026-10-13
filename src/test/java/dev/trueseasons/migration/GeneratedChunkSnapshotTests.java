@@ -77,7 +77,9 @@ public final class GeneratedChunkSnapshotTests {
                     new Tag(10,"otherplugin:data",new Tag[]{text(versionKey,version),text("trueseasons:bluemap_revision","nested") })),
             status("minecraft:full", false, text(versionKey,version), text("trueseasons:bluemap_revision","map-token")),
             status("full", true, text(versionKey,version), text(pendingKey,version), integer(cursorKey,64)),
-            status("minecraft:full", false, integer("trueseasons:bluemap_revision",123))
+            status("minecraft:full", false, integer("trueseasons:bluemap_revision",123)),
+            status("minecraft:full", false, new Tag(7,"trueseasons:ground_cover_v1",new byte[]{1,0,0})),
+            status("minecraft:full", false, integer("trueseasons:ground_cover_v1",123))
         };
         try (RandomAccessFile file = new RandomAccessFile(region.toFile(),"rw")) {
             file.setLength((fixtures.length + 2L) * 4096);
@@ -87,6 +89,8 @@ public final class GeneratedChunkSnapshotTests {
         GeneratedChunkIndex index = new GeneratedChunkIndex();
         var snapshot = index.scanSnapshot(directory);
         var states = snapshot.states();
+        check(!states.get(new ChunkPos(14,0)).matches(version,true), "Saved plant backups prevent cleanup completion without loading/restoration");
+        check(!states.get(new ChunkPos(15,0)).matches(version,true), "Malformed plant backup presence remains visible to cleanup recovery");
         check(states.size() == fixtures.length && snapshot.unreadable().isEmpty(), "Every readable FULL fixture supplies a saved metadata checkpoint");
         SavedChunkState modern = states.get(new ChunkPos(0,0));
         check(modern.full() && version.equals(modern.version()) && !modern.pending() && modern.matches(version,false),

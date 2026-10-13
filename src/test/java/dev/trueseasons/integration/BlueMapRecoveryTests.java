@@ -59,6 +59,20 @@ public final class BlueMapRecoveryTests {
                 file.setLength(12288); file.seek((7 * 32 + 4) * 4L); file.writeInt((2 << 8) | 1);
             }
             check(!SavedChunkRevision.sourceAbsent(folder, 4, 7), "A present chunk with an old token remains pending");
+            // Exact readable payload, without padding to the end of its allocation.
+            var bytes = new ByteArrayOutputStream(); var payload = new DataOutputStream(bytes);
+            payload.writeByte(10); payload.writeUTF(""); payload.writeByte(10); payload.writeUTF("ChunkBukkitValues");
+            payload.writeByte(8); payload.writeUTF("trueseasons:bluemap_revision"); payload.writeUTF("unpadded-final");
+            payload.writeByte(0); payload.writeByte(0); byte[] nbt = bytes.toByteArray();
+            try (RandomAccessFile file = new RandomAccessFile(region.toFile(),"rw")) {
+                file.setLength(8192L+5+nbt.length); file.seek(8192); file.writeInt(nbt.length+1); file.writeByte(3); file.write(nbt);
+            }
+            check(!SavedChunkRevision.sourceAbsent(folder,4,7), "Unpadded final sector is valid present terrain");
+            check(SavedChunkRevision.matches(folder,4,7,"trueseasons:bluemap_revision","unpadded-final"), "Exact saved final marker proves an unpadded payload");
+            try (RandomAccessFile file = new RandomAccessFile(region.toFile(),"rw")) { file.setLength(file.length()-1); }
+            check(!SavedChunkRevision.sourceAbsent(folder,4,7), "A damaged nonzero header is never mistaken for deletion");
+            try { SavedChunkRevision.matches(folder,4,7,"trueseasons:bluemap_revision","unpadded-final"); throw new AssertionError("Truncated payload is saved proof"); }
+            catch(IOException expected) { assertions++; }
             try (RandomAccessFile file = new RandomAccessFile(region.toFile(), "rw")) { file.setLength(100); }
             try { SavedChunkRevision.sourceAbsent(folder, 4, 7); throw new AssertionError("Truncated save is deletion proof"); }
             catch (IOException expected) { assertions++; }

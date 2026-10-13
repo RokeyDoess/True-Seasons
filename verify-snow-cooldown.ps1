@@ -9,7 +9,7 @@ foreach ($taskOld in Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -
     if (Test-Path -LiteralPath (Join-Path $taskRun "plugins/$taskArchivedName")) { $taskArchivedName += '.' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
     Rename-Item -LiteralPath $taskOld.FullName -NewName $taskArchivedName
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.6.jar') -Destination (Join-Path $taskRun 'plugins') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.7.jar') -Destination (Join-Path $taskRun 'plugins') -Force
 $taskProbe = Join-Path $PSScriptRoot 'build/snow-cooldown-probe'
 New-Item -ItemType Directory -Path $taskProbe -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbe 'plugin.yml'), @'

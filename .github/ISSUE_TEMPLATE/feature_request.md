@@ -1,21 +1,17 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest a feature or improvement
 title: ''
 labels: enhancement
 assignees: RokeyDoess
 type: Feature
-
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+**What would you like to change?**
+Describe the feature or improvement.
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+**How would it help your server?**
+Explain the problem it solves and how you expect it to work.
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-Add any other context or screenshots about the feature request here.
+**Examples**
+Add screenshots or examples if helpful.

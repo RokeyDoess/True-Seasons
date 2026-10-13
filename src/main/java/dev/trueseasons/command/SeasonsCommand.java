@@ -99,8 +99,7 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter {
         NamedTextColor tpsColor = tps < plugin.settings().minTps ? NamedTextColor.RED : tps >= 19 ? NamedTextColor.GREEN : NamedTextColor.YELLOW;
         sender.sendMessage(label("Migration paused: ").append(value(plugin.state().paused, plugin.state().paused ? NamedTextColor.YELLOW : NamedTextColor.GREEN))
                 .append(label("; TPS: ")).append(value(String.format(Locale.ROOT, "%.2f", tps), tpsColor)));
-        sender.sendMessage(label("Player priority radius: ").append(value(plugin.settings().playerRadius, NamedTextColor.AQUA))
-                .append(label(" chunks; active winter storms: ")).append(value(plugin.weather().activeStorms(), NamedTextColor.AQUA)));
+        sender.sendMessage(label("Region-by-region migration; active winter storms: ").append(value(plugin.weather().activeStorms(), NamedTextColor.AQUA)));
         for (var job : plugin.engine().jobs()) {
             Component row = value(job.world.getName(), NamedTextColor.GOLD).append(label(": "));
             if (job.indexingSavedProgress()) row = row.append(label("reading saved progress"));
@@ -108,7 +107,8 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter {
                     .append(job.scanning() && !job.reportedFinished() ? value(" indexing", NamedTextColor.YELLOW) : Component.empty())
                     .append(label("; deferred: ")).append(value(job.errors(), job.errors() > 0 ? NamedTextColor.RED : NamedTextColor.GREEN))
                     .append(label("; accumulating snow: ")).append(value(job.transitioning(), NamedTextColor.BLUE))
-                    .append(label("; snow removed this run: ")).append(value(job.removed(), NamedTextColor.AQUA));
+                    .append(label("; blocks removed this run: ")).append(value(job.removed(), NamedTextColor.AQUA))
+                    .append(label("; active region: ")).append(value(job.activeRegion(), NamedTextColor.AQUA));
             sender.sendMessage(row);
             if (job.error() != null) sender.sendMessage(value("Index error: " + job.error(), NamedTextColor.RED));
         }

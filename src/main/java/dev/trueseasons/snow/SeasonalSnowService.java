@@ -26,6 +26,7 @@ public final class SeasonalSnowService implements Listener {
     private final NamespacedKey ownedKey, versionKey, pendingKey, cursorKey;
     private final Supplier<Settings> settings;
     private final Supplier<Boolean> winter;
+    private final WinterGroundCover groundCover;
     // Main-thread-only, private default data: canPlace reads it; no caller can mutate it.
     private BlockData replenishmentSnowData;
     public SeasonalSnowService(Plugin plugin, Supplier<Settings> settings) {
@@ -34,6 +35,7 @@ public final class SeasonalSnowService implements Listener {
     public SeasonalSnowService(Plugin plugin, Supplier<Settings> settings, Supplier<Boolean> winter) {
         this.settings = settings;
         this.winter = winter;
+        groundCover = new WinterGroundCover(plugin);
         ownedKey = new NamespacedKey(plugin, "snow_v1"); versionKey = new NamespacedKey(plugin, "season_version");
         pendingKey = new NamespacedKey(plugin, "winter_pending"); cursorKey = new NamespacedKey(plugin, "winter_cursor");
     }
@@ -58,7 +60,7 @@ public final class SeasonalSnowService implements Listener {
     }
     public boolean hasMetadata(Chunk chunk) {
         var pdc = chunk.getPersistentDataContainer();
-        return pdc.has(ownedKey) || pdc.has(versionKey) || pdc.has(pendingKey) || pdc.has(cursorKey);
+        return pdc.has(ownedKey) || pdc.has(versionKey) || pdc.has(pendingKey) || pdc.has(cursorKey) || groundCover.hasMetadata(chunk);
     }
     private SnowColumns read(Chunk chunk) throws IOException {
         var pdc = chunk.getPersistentDataContainer();
@@ -96,14 +98,20 @@ public final class SeasonalSnowService implements Listener {
         Integer height = chunk.getWorld().getGameRuleValue(GameRules.MAX_SNOW_ACCUMULATION_HEIGHT);
         if (height != null && height <= 0) return new Result(0, 0, 0, false);
         ReplenishmentPolicy policy = new ReplenishmentPolicy(config.snow, config.allExposed,
-                config.surfaces, config.excludedBiomes, height == null ? 1 : height);
+                config.surfaces, config.excludedBiomes, height == null ? 1 : height,
+                biome -> config.climate.applies(Season.WINTER, biome));
         return replenishColumns(chunk, version, columns, policy, defaultSnowData(), target -> {
             BlockState state = target.getState(); state.setType(Material.SNOW);
             return new BlockFormEvent(target, state).callEvent();
         }, beforeWrite, afterWrite, deadline, () -> winter.get() && settings.get().snow && stillCurrent.getAsBoolean());
     }
     record ReplenishmentPolicy(boolean enabled, boolean allExposed, Set<Material> surfaces,
-            List<String> excludedBiomes, int accumulationHeight) {}
+            List<String> excludedBiomes, int accumulationHeight, Predicate<String> winterBiomes) {
+        ReplenishmentPolicy(boolean enabled, boolean allExposed, Set<Material> surfaces,
+                List<String> excludedBiomes, int accumulationHeight) {
+            this(enabled, allExposed, surfaces, excludedBiomes, accumulationHeight, null);
+        }
+    }
     private record Refill(int column, Block target) {}
     /** The isolated policy/data overload lets regression tests exercise real metadata/write ordering. */
     Result replenishColumns(Chunk chunk, String version, int[] columns, ReplenishmentPolicy policy,
@@ -134,6 +142,7 @@ public final class SeasonalSnowService implements Listener {
                 String biome = ground.getBiome().getKey().getKey();
                 if (policy.excludedBiomes.stream().anyMatch(biome::contains)) continue;
             }
+            if (policy.winterBiomes != null && !policy.winterBiomes.test(ground.getBiome().getKey().toString())) continue;
             Block target = ground.getRelative(BlockFace.UP);
             if (!canReplenish(target, snowData)) continue;
             // Completed winter chunks overwhelmingly contain snow already. Decode the
@@ -199,6 +208,7 @@ public final class SeasonalSnowService implements Listener {
         Objects.requireNonNull(beforePhysicalEdit);
         if (columns < 1 || columns > 256) throw new IllegalArgumentException("Columns per step must be 1..256");
         SnowColumns owned = read(chunk);
+        WinterGroundCover.State plants = groundCover.read(chunk); // Validate every backup before any snow or vegetation edit.
         var pdc = chunk.getPersistentDataContainer();
         if ((pdc.has(pendingKey) && !pdc.has(pendingKey, PersistentDataType.STRING))
                 || (pdc.has(cursorKey) && !pdc.has(cursorKey, PersistentDataType.INTEGER)))
@@ -210,25 +220,31 @@ public final class SeasonalSnowService implements Listener {
         boolean resume = winter && version.equals(pending);
         if (winter && isComplete(chunk, version)) return new Result(0, 0, 0, true);
         int placed = 0, removed = 0, conflicts = 0;
-        boolean physicalIntent = false;
+        boolean[] physicalIntent = {false};
+        Runnable intent = () -> { if (!physicalIntent[0]) { beforePhysicalEdit.run(); physicalIntent[0] = true; } };
         // Restore previous ownership before placing a new season. Replacement blocks
         // are never overwritten; ambiguous snow retains metadata and blocks cleanup.
         if (!resume) for (var entry : new ArrayList<>(owned.entries().entrySet())) {
             int column = entry.getKey();
             Block block = chunk.getBlock(column & 15, entry.getValue(), column >> 4);
             if (expected(block)) {
-                if (!physicalIntent) { beforePhysicalEdit.run(); physicalIntent = true; }
+                intent.run();
                 block.setType(Material.AIR, false); removed++; owned.remove(column);
             }
             else if (block.getType() == Material.SNOW) { conflicts++; }
             else owned.remove(column); // original snow is already gone; leave replacement intact
         }
         if (conflicts > 0) { write(chunk, owned); return new Result(0, removed, conflicts, false); }
+        Settings config = winter || !plants.columns.isEmpty() ? settings.get() : null;
+        var restoration = groundCover.restore(plants, block -> !winter || !config.groundCover
+                || !config.climate.applies(Season.WINTER, block.getBiome().getKey().toString()), intent);
+        placed += restoration.restored(); conflicts += restoration.conflicts();
+        if (conflicts > 0) { write(chunk, owned); return new Result(placed, removed, conflicts, false); }
         boolean complete = true;
         if (winter) {
             if (!resume) cursor = 0;
-            Settings config = settings.get();
             List<Block> placements = new ArrayList<>();
+            List<WinterGroundCover.Surface> surfaces = new ArrayList<>();
             int end = Math.min(256, cursor + columns);
             for (int step = cursor; step < end; step++) {
                 int column = PlayerNeighborhood.columnAt(step, chunk.getX(), chunk.getZ(), version);
@@ -236,9 +252,17 @@ public final class SeasonalSnowService implements Listener {
                 // WORLD_SURFACE includes the highest non-air block, so a glass roof,
                 // leaf canopy or occupied vegetation shields everything below it.
                 Block ground = chunk.getWorld().getHighestBlockAt(x, z, HeightMap.WORLD_SURFACE);
-                if (ground.getType() == Material.SNOW || (!config.allExposed && !config.surfaces.contains(ground.getType()))) continue;
                 String biome = ground.getBiome().getKey().getKey();
                 if (config.excludedBiomes.stream().anyMatch(biome::contains)) continue;
+                if (!config.climate.applies(Season.WINTER, ground.getBiome().getKey().toString())) continue;
+                surfaces.add(new WinterGroundCover.Surface(column, ground));
+            }
+            if (config.groundCover) removed += groundCover.hideBatch(plants, surfaces, intent);
+            for (WinterGroundCover.Surface surface : surfaces) {
+                int column = surface.column(); Block ground = surface.top();
+                // Removed vegetation changes the surface height; ordinary columns need no second height lookup.
+                if (ground.getType().isAir()) ground = chunk.getWorld().getHighestBlockAt(ground.getX(), ground.getZ(), HeightMap.WORLD_SURFACE);
+                if (ground.getType() == Material.SNOW || (!config.allExposed && !config.surfaces.contains(ground.getType()))) continue;
                 if (ground.getY() + 1 >= chunk.getWorld().getMaxHeight()) continue;
                 Block target = ground.getRelative(BlockFace.UP);
                 if (!target.getType().isAir()) continue;
@@ -248,7 +272,7 @@ public final class SeasonalSnowService implements Listener {
             // Record the entire plan once before editing. Saves snapshot this same
             // chunk's blocks and PDC together; no world operation occurs off-thread.
             if (!placements.isEmpty()) {
-                if (!physicalIntent) { beforePhysicalEdit.run(); physicalIntent = true; }
+                intent.run();
                 write(chunk, owned);
                 for (Block target : placements) { target.setType(Material.SNOW, false); placed++; }
             }
@@ -278,6 +302,7 @@ public final class SeasonalSnowService implements Listener {
         catch (IOException ignored) { return false; }
     }
     private void edited(Block block) {
+        groundCover.edited(block);
         relinquish(block);
         // If the support is being moved/destroyed, remove our snow before it can move.
         Block above = block.getRelative(BlockFace.UP);
@@ -292,19 +317,37 @@ public final class SeasonalSnowService implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntity(EntityChangeBlockEvent event) { edited(event.getBlock()); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onFade(BlockFadeEvent event) { edited(event.getBlock()); }
+    public void onFade(BlockFadeEvent event) {
+        // Natural melting is not a player clearing vegetation. Regions can wait hours
+        // after the global season changes; retain plant backups until their restoration.
+        if (event.getBlock().getType() == Material.SNOW) relinquish(event.getBlock());
+        else edited(event.getBlock());
+    }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void protectWinterSnow(BlockFadeEvent event) {
-        if (winter.get() && settings.get().protectSnow && expected(event.getBlock()) && owns(event.getBlock())) event.setCancelled(true);
+        protectSnowFade(event, settings.get().protectSnow);
+    }
+    void protectSnowFade(BlockFadeEvent event, boolean protect) {
+        // Ownership, rather than the global season, determines whether restoration still owes this layer.
+        if (protect && expected(event.getBlock()) && owns(event.getBlock())) event.setCancelled(true);
     }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onForm(BlockFormEvent event) {
         if (settings.get().protectSnow && event.getBlock().getType() == Material.SNOW && owns(event.getBlock())) event.setCancelled(true);
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPiston(BlockPistonExtendEvent event) { event.getBlocks().forEach(this::edited); }
+    public void onPiston(BlockPistonExtendEvent event) { event.getBlocks().forEach(block -> pistonEdited(block, event.getDirection())); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPistonRetract(BlockPistonRetractEvent event) { event.getBlocks().forEach(this::edited); }
+    public void onPistonRetract(BlockPistonRetractEvent event) { event.getBlocks().forEach(block -> pistonEdited(block, event.getDirection())); }
+    private void pistonEdited(Block block, BlockFace direction) {
+        edited(block);
+        // Account for destinations conservatively in either movement direction, without loading neighbors.
+        for (BlockFace face : new BlockFace[]{direction, direction.getOppositeFace()}) {
+            int x = block.getX() + face.getModX(), y = block.getY() + face.getModY(), z = block.getZ() + face.getModZ();
+            if (y >= block.getWorld().getMinHeight() && y < block.getWorld().getMaxHeight() && block.getWorld().isChunkLoaded(x >> 4, z >> 4))
+                groundCover.edited(block.getWorld().getBlockAt(x, y, z));
+        }
+    }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onExplosion(BlockExplodeEvent event) { event.blockList().forEach(this::edited); }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

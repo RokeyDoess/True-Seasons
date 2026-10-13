@@ -37,7 +37,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
 
     @Override public void onEnable() {
         try {
-            settings = new Settings(this); visuals = new SeasonVisualResolver(settings.visuals);
+            settings = new Settings(this); visuals = new SeasonVisualResolver(settings.visuals, settings.climate);
             state = new StateStore(getDataFolder().toPath().resolve("state"));
             // A previous completion counter never proves a chunk edit was saved.
             // Revalidate cleanup on startup before reporting removal-safe again.
@@ -50,7 +50,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             Bukkit.getPluginManager().registerEvents(snow, this);
             weather = new WeatherService(this);
             presentation = new NativeSnowPresentation(this, world -> settings.weather && settings.winterSnowfall
-                && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean);
+                && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean, () -> settings.climate);
             Bukkit.getPluginManager().registerEvents(weather, this);
             replenishment = new SnowReplenishmentService(this,snow,this::settings,this::version,
                 world -> season==Season.WINTER&&eligible(world)&&!state.cleanup&&!state.clean
@@ -106,7 +106,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     private void refreshSeason(boolean migrate) {
         SeasonCalendar.State calendar = settings.calendar.at(Instant.now());
         Season next = state.override == null ? calendar.season() : state.override;
-        String nextVersion = (state.override == null ? calendar.version() : "manual-" + next) + "-r" + state.revision + "-snow3";
+        String nextVersion = (state.override == null ? calendar.version() : "manual-" + next) + "-r" + state.revision + "-snow4";
         if (nextVersion.equals(version)) return;
         Season previous = season; season = next; version = nextVersion;
         if(!state.winterVersion.equals(version)) { state.winterVersion=version; state.winterColumns=0; persist(); }
@@ -123,10 +123,10 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     }
     public void reloadSettings() throws Exception {
         Settings next = new Settings(this);
-        SeasonVisualResolver nextVisuals = new SeasonVisualResolver(next.visuals);
+        SeasonVisualResolver nextVisuals = new SeasonVisualResolver(next.visuals, next.climate);
         boolean snowRulesChanged=settings.snow!=next.snow||settings.allExposed!=next.allExposed
-            ||!settings.surfaces.equals(next.surfaces)||!settings.excludedBiomes.equals(next.excludedBiomes)
-            ||!settings.worlds.equals(next.worlds);
+            ||!settings.surfaces.equals(next.surfaces)
+            ||!settings.worlds.equals(next.worlds)||settings.groundCover!=next.groundCover||!settings.climate.sameWinter(next.climate);
         boolean areasChanged=settings.playerRadius!=next.playerRadius;
         settings = next; visuals = nextVisuals;
         if(areasChanged)engine.invalidatePlayerAreas();

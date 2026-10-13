@@ -1,5 +1,5 @@
 name: TrueSeasons
-version: 0.1.6
+version: 0.1.7
 main: dev.trueseasons.TrueSeasonsPlugin
 api-version: '26.3'
 description: Calendar seasons with reversible snow and full-world migrations.

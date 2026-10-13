@@ -8,10 +8,13 @@ migration:
   max-chunks-per-tick: 1
   max-millis-per-tick: 3.0
   pause-below-tps: 18.5
-  prioritize-player-chunks: true
-  # Square radius: 4 means a 9x9 area, nearest rings first. No missing chunks are generated.
-  player-radius-chunks: 4
+  # Complete one saved region before moving to the next, independent of players.
   # Read region headers again periodically to include externally generated chunks.
   rescan-seconds: 300
   # Informational invariant: True Seasons never offers generation-enabled loads.
   generate-missing-chunks: false
+climate:
+  # Match fragments of biome registry keys. [] permits winter in all biomes.
+  winter-excluded-biome-fragments: [desert, badlands, savanna, jungle, warm_ocean]
+  # Exclusions for planned summer grass and leaf colors (not displayed yet).
+  summer-excluded-biome-fragments: [snowy, frozen, ice_spikes, grove, jagged_peaks, cold_ocean]

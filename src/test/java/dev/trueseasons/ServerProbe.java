@@ -366,7 +366,7 @@ public final class ServerProbe extends JavaPlugin implements Listener {
         seasons.reloadSettings();
         var upgraded=YamlConfiguration.loadConfiguration(file);
         check(seasons.settings().allExposed && seasons.settings().excludedBiomes.isEmpty(),"Old defaults upgrade to all exposed surfaces in every biome");
-        check(upgraded.contains("transition.columns-per-step") && upgraded.contains("surface-mode"),"New commented snow options added to an existing config");
+        check(upgraded.contains("ground-cover.enabled") && upgraded.contains("surface-mode"),"New commented snow options added to an existing config");
         check(upgraded.getString("custom-note").equals("preserved") && seasons.settings().concurrency==previousConcurrency,"Existing custom configuration values preserved");
         var newWeather=YamlConfiguration.loadConfiguration(weatherFile);
         check(!newWeather.contains("snowfall.particles-per-player") && !newWeather.contains("snowfall.radius-blocks")

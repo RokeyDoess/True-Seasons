@@ -41,7 +41,6 @@ public final class MigrationBookkeepingTests {
         Field singleton = unsafeType.getDeclaredField("theUnsafe"); singleton.setAccessible(true);
         Object engine = unsafeType.getMethod("allocateInstance", Class.class).invoke(singleton.get(null), ChunkMigrationEngine.class);
         setEngineField(engine, "jobs", Map.of(id, job));
-        setEngineField(engine, "neighborhoods", Map.of());
         setEngineField(engine, "inFlight", 1);
         Class<?> ready = Class.forName("dev.trueseasons.migration.ChunkMigrationEngine$Ready");
         Constructor<?> constructor = ready.getDeclaredConstructor(ChunkMigrationEngine.Job.class, ChunkPos.class, Chunk.class,
@@ -207,7 +206,7 @@ public final class MigrationBookkeepingTests {
         job.nextStep.put(pos,1); job.columns.put(pos,256);
         job.markComplete(pos);
         check(job.finished() && job.percent()==100, "Consumed priority deque slots do not prolong a completed world migration");
-        check(job.queue.size()==1 && job.queued.isEmpty(), "Logical completion retires pending work without a linear queue search per chunk");
+        check(job.queue.isEmpty() && job.queued.isEmpty(), "Completion removes a queued region slot without searching the world queue");
         check(job.columns.isEmpty() && job.nextStep.isEmpty(), "Completing a priority chunk retires its partial transition obligations");
         ChunkPos fresh = new ChunkPos(44,55); job.observeIndexed(fresh,true);
         check(!job.finished() && job.queued.equals(Set.of(fresh)), "Genuine new work still blocks completion alongside an obsolete deque slot");

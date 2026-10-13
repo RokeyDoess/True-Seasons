@@ -4,6 +4,7 @@ import io.netty.channel.Channel;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.function.BiConsumer;
+import java.util.function.IntPredicate;
 import org.bukkit.Bukkit;
 import io.papermc.paper.connection.PlayerCommonConnection;
 
@@ -36,7 +37,7 @@ public final class PaperBiomePackets {
         this.authoritative = authoritative == null ? packAuthoritativeBiomes() : Map.copyOf(authoritative);
     }
 
-    public record RegistryResult(Object packet, int originalCount) {}
+    public record RegistryResult(Object packet, int originalCount, List<String> biomeKeys) {}
     public RegistryResult registry(Object packet) throws ReflectiveOperationException {
         if (!registryPacket.isInstance(packet)) return null;
         Object key = call(packet, "registry");
@@ -59,7 +60,8 @@ public final class PaperBiomePackets {
             Object alias = type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, aliasName);
             expanded.add(entryConstructor.newInstance(alias, Optional.of(cold)));
         }
-        return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size());
+        List<String> biomeKeys = new ArrayList<>(); for (Object entry : entries) biomeKeys.add(call(entry, "id").toString());
+        return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size(), List.copyOf(biomeKeys));
     }
 
     public boolean isChunk(Object packet) { return chunkPacket.isInstance(packet); }
@@ -72,8 +74,11 @@ public final class PaperBiomePackets {
     public long positionKey(Object pos) throws ReflectiveOperationException { return key((int) call(pos, "x"), (int) call(pos, "z")); }
     public record ChunkResult(Object packet, byte[] originalBiomes) {}
     public ChunkResult chunk(Object packet, int count, boolean winter) throws ReflectiveOperationException {
+        return chunk(packet, count, winter, id -> true);
+    }
+    public ChunkResult chunk(Object packet, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
         Object old = call(packet, "chunkData");
-        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, winter);
+        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, winter, winterBiome);
         Object copy = chunkDataConstructor.newInstance(heightmaps.get(old), mapped.sections(), blockEntities.get(old));
         extraPackets.set(copy, extraPackets.get(old));
         chunkData.getMethod("setReady", boolean.class).invoke(copy, true);
@@ -81,19 +86,25 @@ public final class PaperBiomePackets {
     }
     public record BiomeResult(Object packet, Map<Long, byte[]> originals) {}
     public BiomeResult biomes(Object packet, int count, boolean winter) throws ReflectiveOperationException {
+        return biomes(packet, count, winter, id -> true);
+    }
+    public BiomeResult biomes(Object packet, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
         List<?> data = (List<?>) call(packet, "chunkBiomeData"); List<Object> copies = new ArrayList<>(); Map<Long, byte[]> originals = new HashMap<>();
         for (Object entry : data) {
             Object pos = call(entry, "pos"); byte[] buffer = (byte[]) call(entry, "buffer");
             originals.put(positionKey(pos), buffer.clone());
-            copies.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(buffer, count, winter)));
+            copies.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(buffer, count, winter, winterBiome)));
         }
         return new BiomeResult(biomeConstructor.newInstance(List.copyOf(copies)), originals);
     }
     public Object refresh(Map<Long, byte[]> originals, int count, boolean winter) throws ReflectiveOperationException {
+        return refresh(originals, count, winter, id -> true);
+    }
+    public Object refresh(Map<Long, byte[]> originals, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
         List<Object> data = new ArrayList<>(); Constructor<?> posConstructor = type("net.minecraft.world.level.ChunkPos").getConstructor(int.class, int.class);
         for (var entry : originals.entrySet()) {
             Object pos = posConstructor.newInstance((int) (long) entry.getKey(), (int) (entry.getKey() >> 32));
-            data.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(entry.getValue(), count, winter)));
+            data.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(entry.getValue(), count, winter, winterBiome)));
         }
         return biomeConstructor.newInstance(List.copyOf(data));
     }

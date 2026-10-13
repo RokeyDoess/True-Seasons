@@ -26,6 +26,8 @@ public final class SeasonalSnowService implements Listener {
     private final NamespacedKey ownedKey, versionKey, pendingKey, cursorKey;
     private final Supplier<Settings> settings;
     private final Supplier<Boolean> winter;
+    // Main-thread-only, private default data: canPlace reads it; no caller can mutate it.
+    private BlockData replenishmentSnowData;
     public SeasonalSnowService(Plugin plugin, Supplier<Settings> settings) {
         this(plugin, settings, () -> false);
     }
@@ -90,10 +92,12 @@ public final class SeasonalSnowService implements Listener {
         if (!winter.get() || !chunk.isLoaded() || !isComplete(chunk, version) || !chunk.getWorld().hasStorm())
             return new Result(0, 0, 0, false);
         Settings config = settings.get();
+        if (!config.snow) return new Result(0, 0, 0, false);
         Integer height = chunk.getWorld().getGameRuleValue(GameRules.MAX_SNOW_ACCUMULATION_HEIGHT);
+        if (height != null && height <= 0) return new Result(0, 0, 0, false);
         ReplenishmentPolicy policy = new ReplenishmentPolicy(config.snow, config.allExposed,
                 config.surfaces, config.excludedBiomes, height == null ? 1 : height);
-        return replenishColumns(chunk, version, columns, policy, Material.SNOW.createBlockData(), target -> {
+        return replenishColumns(chunk, version, columns, policy, defaultSnowData(), target -> {
             BlockState state = target.getState(); state.setType(Material.SNOW);
             return new BlockFormEvent(target, state).callEvent();
         }, beforeWrite, afterWrite, deadline, () -> winter.get() && settings.get().snow && stillCurrent.getAsBoolean());
@@ -116,7 +120,7 @@ public final class SeasonalSnowService implements Listener {
         for (int column : columns) if (column < 0 || column > 255) throw new IllegalArgumentException("Invalid snow column");
         if (!chunk.isLoaded() || !isComplete(chunk, version) || !policy.enabled || policy.accumulationHeight <= 0
                 || !chunk.getWorld().hasStorm()) return new Result(0, 0, 0, false);
-        SnowColumns owned = read(chunk); List<Refill> placements = new ArrayList<>(); BitSet sampled = new BitSet(256);
+        SnowColumns owned = null; List<Refill> placements = null; BitSet sampled = new BitSet(256);
         World world = chunk.getWorld();
         for (int column : columns) {
             if (System.nanoTime() >= deadline) break;
@@ -132,6 +136,10 @@ public final class SeasonalSnowService implements Listener {
             }
             Block target = ground.getRelative(BlockFace.UP);
             if (!canReplenish(target, snowData)) continue;
+            // Completed winter chunks overwhelmingly contain snow already. Decode the
+            // full ownership bitmap only when a valid empty target actually needs it.
+            // Unknown/malformed metadata still fails before any formation event or write.
+            if (owned == null) owned = read(chunk);
             Integer oldHeight = owned.get(column);
             if (oldHeight != null && oldHeight != target.getY()) {
                 Block previous = chunk.getBlock(column & 15, oldHeight, column >> 4);
@@ -139,8 +147,10 @@ public final class SeasonalSnowService implements Listener {
                 if (previous.getType() == Material.SNOW) continue;
             }
             if (!permit.test(target)) continue;
+            if (placements == null) placements = new ArrayList<>();
             placements.add(new Refill(column, target));
         }
+        if (placements == null) return new Result(0, 0, 0, true);
         // Formation listeners can change other sampled blocks during planning. Recheck the
         // complete batch before claiming ownership, so their replacements remain untouched.
         placements.removeIf(refill -> !canReplenish(refill.target, snowData));
@@ -171,12 +181,22 @@ public final class SeasonalSnowService implements Listener {
         return (type == Material.AIR || type == Material.CAVE_AIR || type == Material.VOID_AIR)
                 && target.getLightFromSky() == 15 && target.getLightFromBlocks() < 10 && target.canPlace(snowData);
     }
+    private BlockData defaultSnowData() {
+        if (replenishmentSnowData == null) replenishmentSnowData = Material.SNOW.createBlockData();
+        return replenishmentSnowData;
+    }
 
     public Result apply(Chunk chunk, Season season, String version, boolean cleanup) throws IOException {
         return applyStep(chunk, season, version, cleanup, 256);
     }
     /** Incremental writes are durable in chunk PDC; a partial chunk is never marked complete. */
     public Result applyStep(Chunk chunk, Season season, String version, boolean cleanup, int columns) throws IOException {
+        return applyStep(chunk, season, version, cleanup, columns, () -> {});
+    }
+    /** Report durable render intent only for batches that will actually edit visible snow. */
+    public Result applyStep(Chunk chunk, Season season, String version, boolean cleanup, int columns,
+            Runnable beforePhysicalEdit) throws IOException {
+        Objects.requireNonNull(beforePhysicalEdit);
         if (columns < 1 || columns > 256) throw new IllegalArgumentException("Columns per step must be 1..256");
         SnowColumns owned = read(chunk);
         var pdc = chunk.getPersistentDataContainer();
@@ -190,17 +210,20 @@ public final class SeasonalSnowService implements Listener {
         boolean resume = winter && version.equals(pending);
         if (winter && isComplete(chunk, version)) return new Result(0, 0, 0, true);
         int placed = 0, removed = 0, conflicts = 0;
+        boolean physicalIntent = false;
         // Restore previous ownership before placing a new season. Replacement blocks
         // are never overwritten; ambiguous snow retains metadata and blocks cleanup.
         if (!resume) for (var entry : new ArrayList<>(owned.entries().entrySet())) {
             int column = entry.getKey();
             Block block = chunk.getBlock(column & 15, entry.getValue(), column >> 4);
-            if (expected(block)) { block.setType(Material.AIR, false); removed++; owned.remove(column); }
+            if (expected(block)) {
+                if (!physicalIntent) { beforePhysicalEdit.run(); physicalIntent = true; }
+                block.setType(Material.AIR, false); removed++; owned.remove(column);
+            }
             else if (block.getType() == Material.SNOW) { conflicts++; }
             else owned.remove(column); // original snow is already gone; leave replacement intact
         }
-        write(chunk, owned);
-        if (conflicts > 0) return new Result(0, removed, conflicts, false);
+        if (conflicts > 0) { write(chunk, owned); return new Result(0, removed, conflicts, false); }
         boolean complete = true;
         if (winter) {
             if (!resume) cursor = 0;
@@ -219,14 +242,16 @@ public final class SeasonalSnowService implements Listener {
                 if (ground.getY() + 1 >= chunk.getWorld().getMaxHeight()) continue;
                 Block target = ground.getRelative(BlockFace.UP);
                 if (!target.getType().isAir()) continue;
-                var snowData = Material.SNOW.createBlockData();
-                if (!target.canPlace(snowData)) continue;
+                if (!target.canPlace(defaultSnowData())) continue;
                 owned.put(column, target.getY()); placements.add(target);
             }
             // Record the entire plan once before editing. Saves snapshot this same
             // chunk's blocks and PDC together; no world operation occurs off-thread.
-            write(chunk, owned);
-            for (Block target : placements) { target.setType(Material.SNOW, false); placed++; }
+            if (!placements.isEmpty()) {
+                if (!physicalIntent) { beforePhysicalEdit.run(); physicalIntent = true; }
+                write(chunk, owned);
+                for (Block target : placements) { target.setType(Material.SNOW, false); placed++; }
+            }
             complete = end == 256;
             if (!complete) {
                 pdc.set(pendingKey, PersistentDataType.STRING, version);

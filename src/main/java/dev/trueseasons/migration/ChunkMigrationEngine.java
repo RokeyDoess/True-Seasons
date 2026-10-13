@@ -63,10 +63,27 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         public int completed() { return done.size(); }
         public int errors() { return failures.size(); }
         public boolean scanning() { return scanning; }
-        private boolean accounted() { return queue.isEmpty() && flight.isEmpty() && failures.isEmpty()
-                && nextStep.isEmpty() && done.size() + unavailable.size() == known.size(); }
+        void markComplete(ChunkPos pos) {
+            done.add(pos); queued.remove(pos); nextStep.remove(pos); columns.remove(pos);
+        }
+        private boolean accounted() { return queued.isEmpty() && flight.isEmpty() && failures.isEmpty()
+                && nextStep.isEmpty() && columns.isEmpty() && done.size() + unavailable.size() == known.size(); }
         public boolean finished() { return scanned && !scanning && accounted(); }
         public boolean reportedFinished() { return scanned && accounted() && (completed || !scanning); }
+        boolean regionReady(int regionX, int regionZ) {
+            if (!scanned || scanning) return false;
+            long firstX = (long) regionX * 32, firstZ = (long) regionZ * 32;
+            if (firstX < Integer.MIN_VALUE || firstX + 31 > Integer.MAX_VALUE
+                    || firstZ < Integer.MIN_VALUE || firstZ + 31 > Integer.MAX_VALUE) return false;
+            // A region query is bounded to its 1,024 slots, regardless of world size.
+            for (int z = 0; z < 32; z++) for (int x = 0; x < 32; x++) {
+                ChunkPos pos = new ChunkPos((int) firstX + x, (int) firstZ + z);
+                if (!known.contains(pos) || unavailable.contains(pos)) continue;
+                if (!done.contains(pos) || flight.contains(pos) || failures.containsKey(pos)
+                        || nextStep.containsKey(pos) || columns.containsKey(pos) || queued.contains(pos)) return false;
+            }
+            return true;
+        }
         public int removed() { return removed; }
         public int placed() { return placed; }
         public boolean indexingSavedProgress() { return !scanned; }
@@ -103,6 +120,11 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     }
     public Collection<Job> jobs() { return Collections.unmodifiableCollection(jobs.values()); }
     public double currentTps() { return tps.read(System.currentTimeMillis()); }
+    /** No loads or disk reads: render readiness follows the current migration generation. */
+    public boolean regionReady(UUID world, int regionX, int regionZ) {
+        Job job = jobs.get(world);
+        return !closed && job != null && Bukkit.getWorld(world) == job.world && job.regionReady(regionX, regionZ);
+    }
     public void invalidatePlayerAreas() { refreshPlayerAreas=true; }
     public void restart() {
         priorityQueue.clear(); priorityQueued.clear(); neighborhoods.clear(); centers = Map.of();
@@ -138,10 +160,9 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         String marker=chunk.getPersistentDataContainer().has(mapKey,org.bukkit.persistence.PersistentDataType.STRING)
             ?chunk.getPersistentDataContainer().get(mapKey,org.bukkit.persistence.PersistentDataType.STRING):null;
         if(complete&&!plugin.integrations().requiresRecovery(job.world.getUID(),pos.x(),pos.z(),marker)) {
-            job.done.add(pos); job.nextStep.remove(pos); job.columns.remove(pos);
-            job.queue.remove(pos); job.queued.remove(pos);
+            job.markComplete(pos);
         } else {
-            job.done.remove(pos); job.completed=false; enqueue(job,pos);
+            job.done.remove(pos); job.completed=false; if(!job.flight.contains(pos))enqueue(job,pos);
             try {
                 int cursor=plugin.snow().coveredColumns(chunk,plugin.version());
                 if(cursor>0&&cursor<=256)job.columns.put(pos,cursor); else job.columns.remove(pos);
@@ -260,7 +281,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
                 && System.nanoTime() < deadline) {
             Job job = worlds.get(Math.floorMod(rotating++, worlds.size()));
             ChunkPos pos = job.queue.pollFirst(); if (pos == null) continue;
-            job.queued.remove(pos);
+            if(!job.queued.remove(pos))continue;
             if (!job.known.contains(pos)||job.done.contains(pos) || job.unavailable.contains(pos) || job.flight.contains(pos) || job.failures.containsKey(pos)) continue;
             if(waitingForCoverage(job,pos)) { enqueue(job,pos); continue; }
             if (nearby(job, pos) && job.nextStep.getOrDefault(pos, 0) > Bukkit.getCurrentTick()) { enqueue(job, pos); continue; }
@@ -287,6 +308,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         try {
             boolean loaded = job.world.isChunkLoaded(pos.x(), pos.z());
             int generation = job.generation;
+            job.queued.remove(pos); // A priority load consumes the same logical request as the background queue.
             job.flight.add(pos); inFlight++;
             // Every load explicitly forbids generation. Never use getChunkAt(x,z).
             job.world.getChunkAtAsync(pos.x(), pos.z(), false, false).whenComplete((chunk, failure) -> {
@@ -323,7 +345,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
             boolean complete = apply(job, request.chunk);
             applications++; applicationNanos += System.nanoTime() - started;
             if(request.generation!=job.generation) { enqueue(job,pos); if(nearby(job,pos))priority(job,pos); return; }
-            if (complete) { job.done.add(pos); job.nextStep.remove(pos); job.columns.remove(pos); }
+            if (complete) job.markComplete(pos);
             else {
                 job.nextStep.put(pos, Bukkit.getCurrentTick() + plugin.settings().snowStepTicks);
                 enqueue(job, pos); if (nearby(job, pos)) priority(job, pos);
@@ -346,14 +368,15 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         String version = plugin.version();
         if (cleanup && !plugin.snow().hasMetadata(chunk)) { plugin.integrations().chunkCompleted(chunk, true); return true; }
         if (!cleanup && plugin.snow().isComplete(chunk, version)) { plugin.integrations().chunkCompleted(chunk, false); return true; }
-        // Persist integration intent BEFORE world edits, so a crash cannot lose it.
+        // Persist integration intent at the first physical edit. Seasonal metadata
+        // alone does not change a map tile and must not request a region render.
         ChunkPos pos = new ChunkPos(chunk.getX(), chunk.getZ());
         boolean gradual = gradual(job,pos);
         int cursor=plugin.snow().coveredColumns(chunk,version);
         int step=gradual?WinterCoveragePolicy.applicationBudget(cursor,globalCoverageColumns(),plugin.settings().snowStepColumns):256;
         if(step==0) { job.columns.put(pos,cursor); return false; }
-        plugin.integrations().chunkUpdated(chunk);
-        SeasonalSnowService.Result result = plugin.snow().applyStep(chunk, plugin.currentSeason(), version, cleanup,Math.min(256,step));
+        SeasonalSnowService.Result result = plugin.snow().applyStep(chunk, plugin.currentSeason(), version, cleanup,Math.min(256,step),
+            () -> plugin.integrations().chunkUpdated(chunk));
         if(!result.complete()) job.columns.put(pos,plugin.snow().coveredColumns(chunk,version));
         job.removed += result.removed(); job.placed += result.placed();
         if (result.conflicts() > 0) throw new IllegalStateException(result.conflicts() + " ambiguous snow layers; ownership retained");
@@ -391,7 +414,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         if(next>globalCoverageColumns()) { plugin.state().winterColumns=next; plugin.persist(); }
     }
     private void updateCoverage() {
-        if(plugin.currentSeason()!=Season.WINTER||plugin.state().cleanup||plugin.state().clean)return;
+        if(plugin.currentSeason()!=Season.WINTER||plugin.state().cleanup||plugin.state().clean||globalCoverageColumns()>=256)return;
         List<Job> active=jobs.values().stream().filter(job -> plugin.eligible(job.world)).toList();
         if(active.isEmpty()||active.stream().anyMatch(job -> !job.scanned))return;
         long total=active.stream().mapToLong(job -> job.total()*256L).sum();
@@ -407,6 +430,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     private void checkCompletion() {
         updateCoverage();
         for (Job job : jobs.values()) if (job.finished() && !job.completed) {
+            job.queue.clear(); // Drop consumed priority/old callback slots once all logical work has settled.
             job.completed = true;
             plugin.getLogger().info((plugin.state().cleanup ? "Cleanup" : "Migration") + " complete: " + job.world.getName() + " (" + job.total() + " chunks)");
             Bukkit.getPluginManager().callEvent(new SeasonMigrationEvent(job.world, plugin.state().cleanup, SeasonMigrationEvent.Phase.COMPLETE));
@@ -431,7 +455,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         boolean restoring = plugin.state().cleanup || plugin.state().clean;
         if ((!restoring && plugin.eligible(job.world)&&!plugin.snow().isComplete(chunk, plugin.version()))
                 || (restoring && plugin.snow().hasMetadata(chunk))) {
-            job.done.remove(pos); job.completed = false; enqueue(job, pos);
+            job.done.remove(pos); job.completed = false; if(!job.flight.contains(pos))enqueue(job, pos);
         }
         if (closed || job.flight.contains(pos) || plugin.state().paused || lowTps()
                 || (!plugin.state().cleanup && !plugin.settings().enabled)) return;

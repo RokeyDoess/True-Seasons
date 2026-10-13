@@ -1,3 +1,14 @@
+# 0.1.6
+
+- Wait for every known FULL chunk in a region to finish its seasonal changes and every pending final revision to be saved before requesting a BlueMap render. Keep player priority and gradual snowfall; combine nearby map changes with a bounded quiet window.
+- Skip map intents for migrations that change only seasonal metadata. Preserve durable intent before the first physical snow edit, including removal, and keep existing pending map revisions through finalization.
+- Display region wait reasons and the number of True Seasons region renders scheduled per map since startup. Retain per-map receipts, newer revision fencing, restart recovery and removed-source recovery.
+- Avoid repeatedly decoding ownership during unsuccessful winter refill samples; cache default snow placement data. Stop recalculating already complete winter coverage each tick.
+- Cache BlueMap scheduler reflection, poll external task removal once per second, and reuse region candidates across maps. Keep proven saved revisions without repeatedly decompressing their chunk data.
+- Group recoverable final map journal writes behind the next durability barrier while retaining synchronous dirty intent before world edits. Avoid replaying freshly completed chunks against older saved map markers.
+- Consume migration requests through constant-time bookkeeping instead of removing entries from the middle of the queue. Discard consumed queue slots when work completes.
+- Match six supplied Spark captures to their server logs and document measured costs, limitations and optimization targets in `docs/profile/oct12-six-captures-report.md`.
+
 # 0.1.5
 
 - Let players clear snow without an immediate refill. Replace the broken-snow priority queue with a configurable grace period, defaulting to 60 seconds, before ordinary winter snowfall may replenish that column.

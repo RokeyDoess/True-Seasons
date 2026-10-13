@@ -38,9 +38,15 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
                         chunk.getBlock(2, top + 2, 0).setType(Material.AIR, false);
                         // Paper's light engine needs time to light a newly created high-altitude fixture.
                         Bukkit.getScheduler().runTaskLater(this, () -> {
-                            try { verify(seasons, world, chunk); }
-                            catch (Throwable failure) { fail(failure); }
-                            finally { if (refill != null) refill.close(); Bukkit.shutdown(); }
+                            // No player holds this remote fixture loaded during the delay.
+                            // Reacquire its existing chunk and verify inside Paper's load lease.
+                            world.getChunkAtAsync(chunk.getX(), chunk.getZ(), false, false).whenComplete((loaded, error) -> {
+                                try {
+                                    if (error != null) throw new IllegalStateException("Fixture reload failed", error);
+                                    verify(seasons, world, Objects.requireNonNull(loaded));
+                                } catch (Throwable failure) { fail(failure); }
+                                finally { if (refill != null) refill.close(); Bukkit.shutdown(); }
+                            });
                         }, 20L);
                     } catch (Throwable failure) { fail(failure); Bukkit.shutdown(); }
                 });
@@ -65,6 +71,7 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
             });
         try {
             seasons.state().paused = true;
+            checks += SnowMigrationIntentRuntimeProbe.verify(this, seasons::settings, chunk);
             chunk.getPersistentDataContainer().set(versionKey, PersistentDataType.STRING, stamp);
             var factory = SnowReplenishmentService.class.getDeclaredConstructor(JavaPlugin.class, SeasonalSnowService.class,
                 Supplier.class, Supplier.class, java.util.function.Predicate.class, java.util.function.Predicate.class,

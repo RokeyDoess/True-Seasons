@@ -1,0 +1,78 @@
+
+FILE 2026-10-12-5.log.gz
+76: [15:30:27] [Server thread/INFO]: [TrueSeasons] Enabling TrueSeasons v0.1.2
+77: [15:30:27] [Server thread/INFO]: [TrueSeasons] Winter snowstorm started in world
+78: [15:30:27] [Server thread/INFO]: [TrueSeasons] Current season: WINTER (manual-WINTER-r3-snow3), zone America/Los_Angeles
+218: [15:44:34] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4545 chunks)
+259: [15:49:43] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4545 chunks)
+283: [15:54:43] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4545 chunks)
+286: [15:55:27] [Server thread/INFO]: Player issued server command: /trueseasons season set autumn
+319: [16:03:57] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 20
+326: [16:04:22] [ForkJoinPool.commonPool-worker-9/INFO]: https://spark.lucko.me/Y5kz1lQTni
+327: [16:04:55] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+336: [16:05:59] [ForkJoinPool.commonPool-worker-12/INFO]: https://spark.lucko.me/fGwY7OOKVx
+406: [16:10:26] [Server thread/INFO]: [TrueSeasons] Migration complete: world (5194 chunks)
+548: [16:15:05] [Server thread/INFO]: [TrueSeasons] Migration complete: world (5236 chunks)
+568: [16:16:31] [Server thread/WARN]: [TrueSeasons] Native snowfall requires player to reconnect: their biome registry predates this plugin instance
+578: [16:17:35] [Server thread/WARN]: [TrueSeasons] Native snowfall requires player to reconnect: their biome registry predates this plugin instance
+587: [16:18:00] [Server thread/INFO]: [TrueSeasons] Disabling TrueSeasons v0.1.2
+591: [16:18:00] [Server thread/INFO]: [BlueMap] Saved and stopped!
+
+FILE 2026-10-12-6.log.gz
+77: [17:08:13] [Server thread/INFO]: [TrueSeasons] Enabling TrueSeasons v0.1.3
+78: [17:08:13] [Server thread/INFO]: [TrueSeasons] Current season: AUTUMN (manual-AUTUMN-r4-snow3), zone America/Los_Angeles
+182: [17:09:52] [Server thread/INFO]: Player issued server command: /trueseasons season set winter
+183: [17:09:52] [Server thread/INFO]: [TrueSeasons] Winter snowstorm started in world
+269: [17:15:02] [Server thread/INFO]: Player issued server command: /trueseasons season set autumn
+275: [17:16:51] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+288: [17:17:55] [ForkJoinPool.commonPool-worker-8/INFO]: https://spark.lucko.me/EGgb2u2OO6
+302: [17:22:37] [Server thread/INFO]: [TrueSeasons] Migration complete: world (7235 chunks)
+339: [17:26:04] [Server thread/INFO]: [TrueSeasons] Migration complete: world (7236 chunks)
+364: [17:27:57] [Server thread/INFO]: [TrueSeasons] Disabling TrueSeasons v0.1.3
+368: [17:27:58] [Server thread/INFO]: [BlueMap] Saved and stopped!
+
+FILE 2026-10-12-10.log.gz
+77: [21:20:14] [Server thread/INFO]: [TrueSeasons] Enabling TrueSeasons v0.1.4
+78: [21:20:14] [Server thread/INFO]: [TrueSeasons] Current season: WINTER (manual-WINTER-r2-snow3), zone America/Los_Angeles
+147: [21:20:18] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+173: [21:21:15] [Server thread/INFO]: Player issued server command: /ts season set autumn
+247: [21:25:24] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+293: [21:26:55] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+322: [21:28:23] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+327: [21:28:26] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+355: [21:29:27] [ForkJoinPool.commonPool-worker-8/INFO]: https://spark.lucko.me/5b5okmZz4Q
+413: [21:34:30] [Server thread/INFO]: [TrueSeasons] Disabling TrueSeasons v0.1.4
+417: [21:34:30] [Server thread/INFO]: [BlueMap] Saved and stopped!
+
+FILE 2026-10-12-11.log.gz
+76: [21:34:50] [Server thread/INFO]: [TrueSeasons] Enabling TrueSeasons v0.1.4
+77: [21:34:50] [Server thread/INFO]: [TrueSeasons] Current season: AUTUMN (manual-AUTUMN-r3-snow3), zone America/Los_Angeles
+146: [21:34:54] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+162: [21:35:45] [Server thread/INFO]: Player issued server command: /ts season set winter
+163: [21:35:45] [Server thread/INFO]: [TrueSeasons] Winter snowstorm started in world
+187: [21:38:35] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+194: [21:39:40] [ForkJoinPool.commonPool-worker-8/INFO]: https://spark.lucko.me/IjK1gxz52X
+195: [21:40:12] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+200: [21:40:19] [Server thread/INFO]: Player issued server command: /spark profiler stop
+203: [21:40:22] [Paper Async Task Handler Thread - 1/INFO]: https://spark.lucko.me/hwGoxVwXQv
+205: [21:40:22] [Paper Async Task Handler Thread - 1/INFO]: [âš¡] Restarted the background profiler. (If you don't want this to happen, run: /spark profiler cancel)
+227: [21:47:02] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+247: [21:50:51] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+248: [21:55:49] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+271: [22:00:00] [Server thread/WARN]: [TrueSeasons] Native snowfall requires player to reconnect: their biome registry predates this plugin instance
+280: [22:00:07] [Server thread/INFO]: [TrueSeasons] Disabling TrueSeasons v0.1.4
+284: [22:00:08] [Server thread/INFO]: [BlueMap] Waiting for task 'updating region (-1, -1)' to stop.. (69.9%)
+285: [22:00:08] [Server thread/INFO]: [BlueMap] Saved and stopped!
+
+FILE latest.log
+76: [23:03:07] [Server thread/INFO]: [TrueSeasons] Enabling TrueSeasons v0.1.5
+77: [23:03:07] [Server thread/INFO]: [TrueSeasons] Current season: WINTER (manual-WINTER-r4-snow3), zone America/Los_Angeles
+146: [23:03:12] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+155: [23:04:52] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+174: [23:05:56] [ForkJoinPool.commonPool-worker-8/INFO]: https://spark.lucko.me/O57EV1YhdZ
+175: [23:06:15] [Server thread/INFO]: Player issued server command: /ts season set autumn
+192: [23:06:57] [Server thread/INFO]: Player issued server command: /spark profiler start --timeout 60
+207: [23:08:01] [ForkJoinPool.commonPool-worker-11/INFO]: https://spark.lucko.me/K1eHg7Rd6L
+215: [23:10:22] [Server thread/INFO]: [TrueSeasons] Migration complete: world (4096 chunks)
+225: [23:11:14] [Server thread/INFO]: [TrueSeasons] Disabling TrueSeasons v0.1.5
+229: [23:11:14] [Server thread/INFO]: [BlueMap] Saved and stopped!

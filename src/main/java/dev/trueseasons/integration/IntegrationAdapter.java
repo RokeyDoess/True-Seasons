@@ -5,6 +5,11 @@ import java.util.UUID;
 
 /** Future DH support implements its own adapter; core never imports DH types. */
 public interface IntegrationAdapter extends AutoCloseable {
+    @FunctionalInterface interface RegionReadiness {
+        /** All known generated chunks in this region have finished current world edits. */
+        boolean ready(UUID world, int regionX, int regionZ);
+    }
+    default void setRegionReadiness(RegionReadiness readiness) {}
     void chunkUpdated(Chunk chunk);
     /** Called after all changes and seasonal metadata for this chunk are complete. */
     void chunkCompleted(Chunk chunk);

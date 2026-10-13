@@ -49,8 +49,11 @@ public final class RenderLedger {
         Entry entry = new Entry(token, List.of()); entry.cleanup = cleanup; entries.put(previous.chunk(), entry); return true;
     }
     public boolean requiresMarkerRecovery(ChunkKey chunk, String marker, boolean saved, boolean deleted) {
+        return requiresMarkerRecovery(chunk, marker, saved, deleted, true);
+    }
+    public boolean requiresMarkerRecovery(ChunkKey chunk, String marker, boolean saved, boolean deleted, boolean restored) {
         Entry entry = entries.get(chunk);
-        return entry != null && (deleted || entry.token.isEmpty() || (!saved && !entry.token.equals(marker)));
+        return entry != null && (deleted || entry.token.isEmpty() || (restored && !saved && !entry.token.equals(marker)));
     }
     public static boolean sourceDeletionAllowed(boolean restored, boolean provenSaved, boolean loaded) {
         return !loaded && (restored || provenSaved);

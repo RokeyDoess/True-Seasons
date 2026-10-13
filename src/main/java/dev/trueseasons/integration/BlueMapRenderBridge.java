@@ -11,6 +11,7 @@ final class BlueMapRenderBridge {
     @FunctionalInterface interface Finalizer { void finish() throws ReflectiveOperationException; }
     private final Object manager;
     private final Class<?> taskType, mapType, strategyType;
+    private final Method scheduleTask, scheduledTasks, removeTask, hasMoreWork, doWork, cancelTask, description;
     private final ClassLoader loader;
     BlueMapRenderBridge(RenderManager api) throws ReflectiveOperationException {
         loader = api.getClass().getClassLoader();
@@ -19,6 +20,11 @@ final class BlueMapRenderBridge {
         taskType = Class.forName("de.bluecolored.bluemap.common.rendermanager.RenderTask", true, loader);
         mapType = Class.forName("de.bluecolored.bluemap.core.map.BmMap", true, loader);
         strategyType = Class.forName("de.bluecolored.bluemap.common.rendermanager.TileUpdateStrategy", true, loader);
+        scheduleTask = manager.getClass().getMethod("scheduleRenderTask", taskType);
+        scheduledTasks = manager.getClass().getMethod("getScheduledRenderTasks");
+        removeTask = manager.getClass().getMethod("removeRenderTask", taskType);
+        hasMoreWork = taskType.getMethod("hasMoreWork"); doWork = taskType.getMethod("doWork");
+        cancelTask = taskType.getMethod("cancel"); description = taskType.getMethod("getDescription");
     }
     Ticket submit(BlueMapMap map, Collection<Vector2i> regions) throws ReflectiveOperationException {
         Object nativeMap = map.getClass().getMethod("map").invoke(map);
@@ -38,14 +44,14 @@ final class BlueMapRenderBridge {
         Ticket ticket = new Ticket(delegate, world, invalidate, List.copyOf(regions), regionTasks, cancelled,
                 () -> finishMap(nativeMap, regionTasks, cancelled, renderError, chunkError));
         ticket.proxy = Proxy.newProxyInstance(loader, new Class<?>[]{taskType}, ticket);
-        boolean accepted = (boolean) manager.getClass().getMethod("scheduleRenderTask", taskType).invoke(manager, ticket.proxy);
+        boolean accepted = (boolean) scheduleTask.invoke(manager, ticket.proxy);
         return accepted ? ticket : null;
     }
     boolean scheduled(Ticket ticket) throws ReflectiveOperationException {
-        return ((List<?>) manager.getClass().getMethod("getScheduledRenderTasks").invoke(manager)).contains(ticket.proxy);
+        return ((List<?>) scheduledTasks.invoke(manager)).contains(ticket.proxy);
     }
     void cancel(Ticket ticket) {
-        try { manager.getClass().getMethod("removeRenderTask", taskType).invoke(manager, ticket.proxy); }
+        try { removeTask.invoke(manager, ticket.proxy); }
         catch (ReflectiveOperationException ignored) { ticket.cancel(); }
     }
     private static Object field(Object object, String name) throws ReflectiveOperationException {
@@ -119,19 +125,19 @@ final class BlueMapRenderBridge {
         void cancel() {
             cancelled = true;
             synchronized (this) { notifyAll(); }
-            try { taskType.getMethod("cancel").invoke(delegate); }
+            try { cancelTask.invoke(delegate); }
             catch (ReflectiveOperationException failure) { failed = true; }
         }
         @Override public Object invoke(Object object, Method method, Object[] args) throws Throwable {
             return switch (method.getName()) {
                 case "equals" -> object == args[0];
                 case "hashCode" -> System.identityHashCode(object);
-                case "toString", "getDescription" -> "TrueSeasons: " + taskType.getMethod("getDescription").invoke(delegate);
+                case "toString", "getDescription" -> "TrueSeasons: " + description.invoke(delegate);
                 // Identity prevents older native tasks from swallowing a newer final revision.
                 case "contains" -> object == args[0];
                 case "cancel" -> { cancel(); yield null; }
                 case "hasMoreWork" -> {
-                    boolean more = !cancelled && !failed && (!saved || (boolean) taskType.getMethod("hasMoreWork").invoke(delegate));
+                    boolean more = !cancelled && !failed && (!saved || (boolean) hasMoreWork.invoke(delegate));
                     if (!more && active.get() == 0) finished = true;
                     yield more;
                 }
@@ -147,7 +153,7 @@ final class BlueMapRenderBridge {
                                 initialized = true;
                             }
                             if (!cancelled && !failed) {
-                                nativeWork = (boolean) taskType.getMethod("hasMoreWork").invoke(delegate);
+                                nativeWork = (boolean) hasMoreWork.invoke(delegate);
                                 // Reserve delegate work under the same lock as the final-save gate.
                                 if (nativeWork) nativeActive.incrementAndGet();
                                 else {
@@ -158,7 +164,7 @@ final class BlueMapRenderBridge {
                             }
                         }
                         if (nativeWork) {
-                            try { taskType.getMethod("doWork").invoke(delegate); }
+                            try { doWork.invoke(delegate); }
                             finally { nativeActive.decrementAndGet(); synchronized (this) { notifyAll(); } }
                         } else if (finish) { finalizer.finish(); saved = true; }
                     } catch (ReflectiveOperationException | InterruptedException | RuntimeException failure) {

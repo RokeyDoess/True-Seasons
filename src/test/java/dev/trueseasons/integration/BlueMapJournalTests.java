@@ -29,6 +29,7 @@ public final class BlueMapJournalTests {
         Path tests = Path.of("build/test-journals"); Files.createDirectories(tests);
         Path folder = Files.createTempDirectory(tests, "trueseasons-journal-");
         try {
+            deferredFinalCrash(folder.resolve("deferred-final"));
             DurableRenderJournal journal = new DurableRenderJournal(folder);
             journal.put("chunk-a", bytes("dirty"), true); crash(journal);
             journal = new DurableRenderJournal(folder);
@@ -96,5 +97,37 @@ public final class BlueMapJournalTests {
             }
         }
         System.out.println("BlueMap journal tests passed: " + assertions + " assertions");
+    }
+    private static void deferredFinalCrash(Path folder) throws Exception {
+        RenderLedger ledger = new RenderLedger(); FinalRevisionDurability durability = new FinalRevisionDurability();
+        RenderLedger.ChunkKey key = new RenderLedger.ChunkKey(UUID.randomUUID(), 3, 7);
+        RenderLedger.ChunkKey next = new RenderLedger.ChunkKey(key.world(), 4, 7);
+        check(durability.forceBeforeMarker(key), "Fresh final adoption without a durable dirty intent still forces immediately");
+        DurableRenderJournal journal = new DurableRenderJournal(folder);
+        ledger.dirty(key); journal.put("edited", bytes("dirty"), true); durability.forced(ledger, List.of(key));
+        long durablePrefix = Files.size(folder.resolve("bluemap.journal"));
+        check(!durability.forceBeforeMarker(key), "Previously forced pre-edit intent permits deferred final durability");
+        ledger.complete(key, "unforced-final"); journal.put("edited", bytes("unforced-final"), false); durability.appendedFinal(key, 100);
+        check(durability.due(100, 128).isEmpty(), "Final append does not immediately force in its completion tick");
+        check(durability.due(101, 128).equals(List.of(key)), "Remaining finals join the next tick's bounded force batch");
+        crash(journal);
+        // Power loss may discard the entire unforced tail even if its marker reached the chunk save first.
+        try (FileChannel file = FileChannel.open(folder.resolve("bluemap.journal"), StandardOpenOption.WRITE)) { file.truncate(durablePrefix); }
+        journal = new DurableRenderJournal(folder);
+        check(value(journal, "edited").equals("dirty"), "Losing an unforced final never loses the earlier durable edit intent");
+        RenderLedger recovered = new RenderLedger(); recovered.restore(key, "", List.of());
+        FinalRevisionDurability retry = new FinalRevisionDurability(); retry.restored(recovered);
+        check(recovered.requiresMarkerRecovery(key, "unforced-final", false, false, true), "Saved-current snow with lost final still requests token finalization");
+        check(!retry.forceBeforeMarker(key), "Recovered durable dirty intent can safely finalize without world replay");
+        recovered.complete(key, "recovered-final"); journal.put("edited", bytes("recovered-final"), false); retry.appendedFinal(key, 101);
+        recovered.dirty(next); journal.put("next-edit", bytes("dirty"), true); retry.forced(recovered, List.of(next));
+        check(retry.due(102, 128).isEmpty(), "The next mandatory pre-edit force also makes earlier finals durable");
+        check(!recovered.acknowledge(new RenderLedger.Revision(key, "unforced-final"), "surface"), "Lost revision receipts cannot acknowledge recovered final tokens");
+        crash(journal); journal = new DurableRenderJournal(folder);
+        check(value(journal, "edited").equals("recovered-final"), "Shared pre-edit force persists the recovered final across restart");
+        check(value(journal, "next-edit").equals("dirty"), "Shared force still protects the next physical edit intent");
+        for (int n = 0; n < 130; n++) retry.appendedFinal(new RenderLedger.ChunkKey(key.world(), n, 8), 103);
+        check(retry.due(104, 128).size() == 128, "Deferred final batch remains bounded under a burst");
+        journal.close();
     }
 }

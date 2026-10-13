@@ -28,6 +28,9 @@ public final class BlueMapRecoveryTests {
         ledger.restore(key, "winter-final", List.of("surface"));
         check(!ledger.requiresMarkerRecovery(key, "winter-final", false, false), "Correct saved marker avoids world replay before background proof");
         check(ledger.requiresMarkerRecovery(key, null, false, false), "Final marker lost after checkpoint requests bounded recovery");
+        check(!ledger.requiresMarkerRecovery(key, "older-disk-token", false, false, false), "Fresh owned final does not reopen world work from an old disk snapshot");
+        check(ledger.requiresMarkerRecovery(key, "older-disk-token", false, false, true), "Restored mismatched final still needs bounded marker recovery");
+        check(!ledger.requiresMarkerRecovery(key, "winter-final", false, false, true), "Matching restored marker avoids world replay before save-proof scan");
         check(!ledger.requiresMarkerRecovery(key, null, true, false), "Persisted save proof survives temporary marker purge");
         check(ledger.requiresMarkerRecovery(key, "winter-final", true, true), "A recreated deleted chunk needs a new revision");
         Revision winter = new Revision(key, "winter-final");
@@ -37,6 +40,8 @@ public final class BlueMapRecoveryTests {
         ledger.dirty(key); ledger.complete(key, "autumn-final");
         check(!ledger.replaceWithDeletion(new Revision(key, "deleted-final"), "stale-delete", false), "A later Autumn edit supersedes an in-flight absence proof");
         check(!ledger.requiresMarkerRecovery(key, "autumn-final", false, false), "New saved Autumn marker hydrates migration without replay");
+        ledger.dirty(key);
+        check(ledger.requiresMarkerRecovery(key, "old-autumn-token", false, false, false), "Fresh incomplete dirty intent still requires world completion");
 
         Path testRoot = Path.of("build/test-recovery"); Files.createDirectories(testRoot);
         Path folder = Files.createTempDirectory(testRoot, "source-");

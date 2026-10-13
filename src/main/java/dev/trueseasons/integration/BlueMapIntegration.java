@@ -18,8 +18,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 /** Final revisions are retired only after saved-chunk proof and a receipt from every map. */
 public final class BlueMapIntegration implements IntegrationAdapter, Listener {
-    private record Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed, List<Revision> regionMembers) {
-        Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed) { this(revision, folder, purge, absenceAllowed, List.of()); }
+    private record Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed, boolean verifyMarker, List<Revision> regionMembers) {
+        Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed, boolean verifyMarker) { this(revision, folder, purge, absenceAllowed, verifyMarker, List.of()); }
     }
     private record Proof(Revision revision, boolean purge, boolean absent, String error, boolean observationOnly, List<Revision> regionMembers, Path source) {}
     private record DeletionBatch(Region region, ArrayDeque<Revision> remaining, Path source) {}
@@ -35,6 +35,10 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     });
     private final NamespacedKey revisionKey, seasonKey;
     private final RenderLedger ledger = new RenderLedger();
+    private final FinalRevisionDurability finalDurability = new FinalRevisionDurability();
+    private final RegionRenderGate regionGate = new RegionRenderGate();
+    private RegionReadiness regionReadiness = (world, x, z) -> true;
+    private final Map<Region, RegionRenderGate.State> regionWaits = new HashMap<>();
     private final Map<ChunkKey, String> readable = new HashMap<>();
     private final Map<ChunkKey, Path> folders = new HashMap<>();
     private final Set<ChunkKey> restored = new HashSet<>(), deleted = new HashSet<>();
@@ -51,7 +55,8 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     private CompletableFuture<Boolean> compacting;
     private RenderManager manager;
     private BlueMapRenderBridge bridge;
-    private long lastFlush, lastRenderAttempt, lastProbe, lastCompact, lastRetire, lastWorldRefresh, lastStatus;
+    private long lastFlush, lastRenderAttempt, lastProbe, lastCompact, lastRetire, lastWorldRefresh, lastStatus, lastFlightInspection;
+    private long regionRendersScheduled;
     private final Map<UUID, BlueMapWorld> mappedWorlds = new LinkedHashMap<>();
     private BlueMapAPI mappedApi;
     private int probeCursor, purgeCursor;
@@ -98,6 +103,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
             migration.put("__format", new byte[]{1}); journal.putAll(migration, true);
         }
         restored.addAll(ledger.entries().keySet());
+        finalDurability.restored(ledger);
         Bukkit.getPluginManager().registerEvents(this, plugin);
     }
     private static ChunkKey rowKey(Map<?, ?> row) {
@@ -112,6 +118,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         ChunkKey key = key(chunk);
         if (!settings.get().blueMap && !ledger.entries().containsKey(key)) return;
         readable.remove(key); purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.remove(key); proofErrors.remove(key);
+        regionGate.changed(key.region(), System.currentTimeMillis());
         if (ledger.dirty(key) || durabilityRequired.contains(key)) persist(Set.of(key), true); // Before editing the world.
         chunk.getPersistentDataContainer().remove(revisionKey);
     }
@@ -130,7 +137,12 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         if (entry.token().isEmpty() || entry.token().equals("legacy")) {
             if (entry.token().equals("legacy")) ledger.dirty(key);
             ledger.complete(key, UUID.randomUUID().toString()); ledger.cleanup(key, cleanup);
-            folders.putIfAbsent(key, fallbackFolder(chunk.getWorld())); persist(Set.of(key), true);
+            regionGate.changed(key.region(), System.currentTimeMillis());
+            folders.putIfAbsent(key, fallbackFolder(chunk.getWorld()));
+            boolean force = finalDurability.forceBeforeMarker(key);
+            try { persist(Set.of(key), force); }
+            catch (UncheckedIOException failure) { durabilityRequired.add(key); throw failure; }
+            if (!force) finalDurability.appendedFinal(key, Bukkit.getCurrentTick());
         }
         if (durabilityRequired.contains(key)) persist(Set.of(key), true);
         entry = ledger.entries().get(key);
@@ -152,13 +164,15 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         if (closed) return;
         long now = System.currentTimeMillis();
         if (!durabilityRequired.isEmpty()) persist(new ArrayList<>(durabilityRequired), true);
+        persist(finalDurability.due(Bukkit.getCurrentTick(), 128), true);
         Optional<BlueMapAPI> instance = BlueMapAPI.getInstance();
         if (instance.isPresent() && (mappedApi != instance.get() || now - lastWorldRefresh >= 1000)) {
             lastWorldRefresh = now; mappedWorlds.clear(); mappedApi = instance.get();
             BlueMapAPI api = instance.get();
-            for (ChunkKey key : ledger.entries().keySet()) if (!mappedWorlds.containsKey(key.world())) {
-                World world = Bukkit.getWorld(key.world());
-                if (world != null) api.getWorld(world).ifPresent(mapped -> mappedWorlds.put(key.world(), mapped));
+            Set<UUID> ids = new LinkedHashSet<>(); ledger.entries().keySet().forEach(key -> ids.add(key.world()));
+            for (UUID id : ids) {
+                World world = Bukkit.getWorld(id);
+                if (world != null) api.getWorld(world).ifPresent(mapped -> mappedWorlds.put(id, mapped));
             }
             mappedWorlds.forEach((id, world) -> ledger.entries().keySet().stream().filter(k -> k.world().equals(id)).forEach(k -> {
                 Path folder = world.getSaveFolder().toAbsolutePath().normalize(); if (!folder.equals(folders.put(k, folder))) checkpointDirty.add(k);
@@ -191,6 +205,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                             || !RenderLedger.sourceDeletionAllowed(restored.contains(key), proof.revision.token().equals(readable.get(key)), false)) continue;
                     boolean cleanup = entry != null ? entry.cleanup() : purge.cleanup;
                     if (!ledger.replaceWithDeletion(proof.revision, UUID.randomUUID().toString(), cleanup)) continue;
+                    regionGate.changed(key.region(), now);
                     purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.add(key);
                     readable.put(key, ledger.entries().get(key).token()); newlySaved.add(key);
                     continue;
@@ -221,6 +236,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                 if (entry == null || !ledger.unchanged(previous) || deleted.contains(key)
                         || !RenderLedger.sourceDeletionAllowed(restored.contains(key), entry.token().equals(readable.get(key)), world.isChunkLoaded(key.x(), key.z()))) continue;
                 if (!ledger.replaceWithDeletion(previous, UUID.randomUUID().toString(), entry.cleanup())) continue;
+                regionGate.changed(key.region(), now);
                 purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.add(key); proofErrors.remove(key);
                 readable.put(key, ledger.entries().get(key).token()); newlySaved.add(key);
             }
@@ -233,6 +249,8 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                 RenderManager current = instance.get().getRenderManager();
                 if (manager != current) { discardFlights(); manager = current; bridge = null; }
                 if (bridge == null) bridge = new BlueMapRenderBridge(manager);
+                boolean inspectScheduler = now - lastFlightInspection >= 1000;
+                if (inspectScheduler) lastFlightInspection = now;
                 for (var iterator = flights.entrySet().iterator(); iterator.hasNext();) {
                     var flight = iterator.next();
                     if (flight.getValue().ticket.finished()) {
@@ -242,7 +260,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                                 if (ledger.acknowledge(revision, flight.getKey())) checkpointDirty.add(revision.chunk());
                         } else lastFailure = flight.getKey() + ": " + flight.getValue().ticket.failure();
                         iterator.remove();
-                    } else if (!bridge.scheduled(flight.getValue().ticket)) {
+                    } else if (inspectScheduler && !bridge.scheduled(flight.getValue().ticket)) {
                         flight.getValue().ticket.cancel(); lastFailure = flight.getKey() + ": render task was removed; retry pending"; iterator.remove();
                     }
                 }
@@ -293,21 +311,21 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                 World world = Bukkit.getWorld(region.getKey().world());
                 if (excluded.contains(region.getKey()) || world == null || hasLoadedChunk(world, region.getKey())) continue;
                 Revision first = region.getValue().getFirst();
-                probes.add(new Probe(first, folders.get(first.chunk()), false, true, List.copyOf(region.getValue()))); regionBudget--;
+                probes.add(new Probe(first, folders.get(first.chunk()), false, true, false, List.copyOf(region.getValue()))); regionBudget--;
             }
             for (int n = 0; n < Math.min(128, keys.size()); n++) {
                 ChunkKey key = keys.get(Math.floorMod(probeCursor++, keys.size())); RenderLedger.Entry entry = ledger.entries().get(key);
                 World world = Bukkit.getWorld(key.world());
                 boolean absence = !deleted.contains(key) && world != null && RenderLedger.sourceDeletionAllowed(restored.contains(key), entry.token().equals(readable.get(key)), world.isChunkLoaded(key.x(), key.z()));
                 if (folders.containsKey(key) && ((!entry.token().isEmpty() && !entry.token().equals(readable.get(key))) || absence))
-                    probes.add(new Probe(new Revision(key, entry.token()), folders.get(key), false, absence));
+                    probes.add(new Probe(new Revision(key, entry.token()), folders.get(key), false, absence, !entry.token().equals(readable.get(key))));
                 else if (entry.token().equals("legacy")) { readable.put(key, "legacy"); checkpointDirty.add(key); }
             }
             List<ChunkKey> purgeKeys = new ArrayList<>(purges.keySet());
             for (int n = 0; n < Math.min(128, purgeKeys.size()); n++) {
                 ChunkKey key = purgeKeys.get(Math.floorMod(purgeCursor++, purgeKeys.size()));
                 World world = Bukkit.getWorld(key.world()); boolean absence = world != null && !world.isChunkLoaded(key.x(), key.z());
-                if ((purgeLoaded.contains(key) || absence) && folders.containsKey(key)) probes.add(new Probe(new Revision(key, purges.get(key).token), folders.get(key), true, absence));
+                if ((purgeLoaded.contains(key) || absence) && folders.containsKey(key)) probes.add(new Probe(new Revision(key, purges.get(key).token), folders.get(key), true, absence, true));
             }
             checking = CompletableFuture.supplyAsync(() -> {
                 List<Proof> proven = new ArrayList<>();
@@ -322,7 +340,10 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                         if (probe.absenceAllowed && SavedChunkRevision.sourceAbsent(probe.folder, key.x(), key.z())) {
                             proven.add(new Proof(probe.revision, probe.purge, true, null, false, List.of(), probe.folder)); continue;
                         }
-                        if (probe.revision.token().isEmpty()) continue;
+                        if (!probe.verifyMarker || probe.revision.token().isEmpty()) {
+                            // Saved revisions only need the cheap disappearance check, not repeated NBT decompression.
+                            proven.add(new Proof(probe.revision, probe.purge, false, null, true, List.of(), probe.folder)); continue;
+                        }
                         boolean provenSaved = probe.purge
                                 ? SavedChunkRevision.purged(probe.folder, key.x(), key.z(), revisionKey.toString(), probe.revision.token())
                                 : SavedChunkRevision.matches(probe.folder, key.x(), key.z(), revisionKey.toString(), probe.revision.token());
@@ -338,20 +359,32 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         lastRenderAttempt = now;
         try {
             int remaining = settings.get().blueMapRegions; boolean submitted = false;
+            long quietMillis = settings.get().blueMapSeconds * 1000L;
+            Map<Region, RegionRenderGate.Batch> batches = regionGate.snapshot(ledger, readable, deleted);
+            regionGate.retain(batches.keySet()); regionWaits.keySet().retainAll(batches.keySet());
             for (BlueMapWorld world : worlds.values()) for (BlueMapMap map : world.getMaps()) {
                 if (remaining == 0 || flights.containsKey(map.getId()) || map.isFrozen()) continue;
                 Map<Region, List<Revision>> regions = new LinkedHashMap<>();
-                for (var entry : ledger.entries().entrySet()) {
-                    ChunkKey key = entry.getKey(); Revision revision = new Revision(key, entry.getValue().token());
-                    if (world != worlds.get(key.world()) || !entry.getValue().token().equals(readable.get(key)) || !ledger.needs(revision, map.getId())) continue;
-                    if (deletionStaging.contains(key.region())) continue;
-                    if (regions.containsKey(key.region()) || regions.size() < remaining)
-                        regions.computeIfAbsent(key.region(), ignored -> new ArrayList<>()).add(revision);
+                for (var row : batches.entrySet()) {
+                    if (regions.size() >= remaining) break;
+                    Region region = row.getKey(); RegionRenderGate.Batch batch = row.getValue();
+                    if (world != worlds.get(region.world())) continue;
+                    List<Revision> needed = batch.revisions().stream().filter(revision -> ledger.needs(revision, map.getId())).toList();
+                    if (needed.isEmpty()) continue;
+                    RegionRenderGate.State state = regionGate.state(batch, regionReadiness, deletionStaging, now, quietMillis);
+                    regionWaits.put(region, state);
+                    if (state == RegionRenderGate.State.READY) regions.put(region, needed);
                 }
+                if (regions.isEmpty()) continue;
+                // Recheck the migration predicate immediately before entering the native scheduler.
+                // A callback can discover new terrain while candidates are being collected.
+                regions.keySet().removeIf(region -> regionGate.state(batches.get(region), regionReadiness, deletionStaging, now, quietMillis) != RegionRenderGate.State.READY);
                 if (regions.isEmpty()) continue;
                 BlueMapRenderBridge.Ticket ticket = bridge.submit(map, regions.keySet().stream().map(r -> new Vector2i(r.x(), r.z())).toList());
                 if (ticket != null) {
+                    regionRendersScheduled += regions.size();
                     flights.put(map.getId(), new Flight(ticket, regions.values().stream().flatMap(Collection::stream).toList())); remaining -= regions.size(); submitted = true;
+                    regions.keySet().forEach(region -> regionGate.submitted(batches.get(region), now));
                 }
             }
             if (submitted) lastFlush = now;
@@ -391,6 +424,8 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     }
     private void refreshStatus(Optional<BlueMapAPI> instance) {
         int transitions = 0, awaitingSave = 0, ready = 0, sourceDeletions = 0, unmapped = 0, frozen = 0;
+        Set<Region> pendingRegions = new HashSet<>(); ledger.entries().keySet().forEach(key -> pendingRegions.add(key.region()));
+        regionWaits.keySet().retainAll(pendingRegions);
         Map<UUID, Boolean> configured = new HashMap<>();
         for (var world : mappedWorlds.entrySet()) {
             Collection<BlueMapMap> maps = world.getValue().getMaps(); configured.put(world.getKey(), !maps.isEmpty());
@@ -406,9 +441,16 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         }
         StringBuilder status = new StringBuilder(settings.get().blueMap ? (instance.isPresent() ? "connected" : "waiting for BlueMap") : "disabled; render requests retained");
         status.append("; ").append(flights.size()).append(" render batches; ").append(purges.size()).append(" metadata purges");
+        status.append("; region renders scheduled this run: ").append(regionRendersScheduled);
         if (transitions > 0) status.append("; waiting for completed transitions: ").append(transitions).append(" chunks");
         if (awaitingSave > 0) status.append("; waiting for saved final revisions/recovery: ").append(awaitingSave).append(" chunks");
         if (sourceDeletions > 0) status.append("; removed-source map cleanup queued: ").append(sourceDeletions).append(" chunks");
+        long migratingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.MIGRATING).count();
+        long savingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.SAVING).count();
+        long coalescingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.COALESCING).count();
+        if (migratingRegions > 0) status.append("; regions waiting for world edits: ").append(migratingRegions);
+        if (savingRegions > 0) status.append("; regions waiting for final saves: ").append(savingRegions);
+        if (coalescingRegions > 0) status.append("; regions coalescing recent edits: ").append(coalescingRegions);
         if (!deletionStaging.isEmpty()) status.append("; recovering removed regions: ").append(deletionStaging.size());
         if (ready > 0 && flights.isEmpty()) status.append("; saved revisions queued for next render batch: ").append(ready).append(" chunks");
         if (unmapped > 0 && instance.isPresent()) status.append("; waiting for configured map/world: ").append(unmapped).append(" chunks");
@@ -457,6 +499,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         try {
             Map<String, byte[]> changes = new LinkedHashMap<>(); for (ChunkKey key : keys) changes.put(journalKey(key), encode(key));
             journal.putAll(changes, force); checkpointDirty.removeAll(keys); durabilityRequired.removeAll(keys);
+            if (force) finalDurability.forced(ledger, keys);
         } catch (IOException failure) {
             checkpointDirty.addAll(keys); if (force) durabilityRequired.addAll(keys);
             throw new UncheckedIOException("Cannot persist BlueMap requests", failure);
@@ -467,12 +510,13 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         ledger.entries().forEach((key, entry) -> { if (entry.cleanup() && !entry.token().equals(readable.get(key))) keys.add(key); }); return keys.size();
     }
     @Override public boolean isEnabled() { return settings.get().blueMap; }
+    @Override public void setRegionReadiness(RegionReadiness readiness) { regionReadiness = Objects.requireNonNull(readiness); }
     @Override public boolean requiresRecovery(UUID world, int x, int z) {
         return requiresRecovery(world, x, z, null);
     }
     @Override public boolean requiresRecovery(UUID world, int x, int z, String marker) {
         ChunkKey key = new ChunkKey(world, x, z); RenderLedger.Entry entry = ledger.entries().get(key);
-        return ledger.requiresMarkerRecovery(key, marker, entry != null && entry.token().equals(readable.get(key)), deleted.contains(key));
+        return ledger.requiresMarkerRecovery(key, marker, entry != null && entry.token().equals(readable.get(key)), deleted.contains(key), restored.contains(key));
     }
     @Override public int pending() { return ledger.regions(); }
     @Override public String status() { return detail; }

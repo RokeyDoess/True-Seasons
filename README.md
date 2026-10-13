@@ -4,7 +4,7 @@ Calendar seasons and reversible winter snow for Paper servers.
 
 True Seasons follows a real-world calendar, brings Minecraft's native snowfall to winter, and adds snow to exposed terrain, roofs and leaf canopies. When winter ends, it removes the snow it placed while preserving existing snow, plants and player replacements.
 
-**Development build: 0.1.5.** Winter snow and weather are available; the full seasonal grass and foliage color set is still being developed.
+**Development build: 0.1.6.** Winter snow and weather are available; the full seasonal grass and foliage color set is still being developed.
 
 ## What to expect
 
@@ -85,7 +85,9 @@ The introductory winter storm lasts until that world's terrain update finishes, 
 
 ## BlueMap
 
-With BlueMap installed and enabled, True Seasons queues updates as terrain changes. The map waits for the world changes to be saved and for BlueMap to finish its work, so map tiles can trail what players see in game.
+With BlueMap installed and enabled, True Seasons groups its updates by region. Each region waits until its known terrain has finished changing and its pending changes are saved. Nearby changes are combined before requesting a render, so map tiles can trail what players see in game. Updates that only record seasonal progress do not request a map render.
+
+Status explains whether regions are waiting for terrain, saves or combined updates. It also shows **region renders scheduled this run**, counting True Seasons requests for each map since startup. BlueMap's own automatic updates are separate; later snow changes or newly explored terrain can require another render.
 
 **WORLD COMPLETE — MAP UPDATES PENDING** means the terrain work has finished and the map is still catching up. Pending map work does not restart seasonal world updates. Keep normal server autosaving enabled and allow BlueMap to render; frozen or stopped maps will keep their updates pending.
 

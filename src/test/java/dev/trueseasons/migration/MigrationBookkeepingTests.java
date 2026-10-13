@@ -203,6 +203,15 @@ public final class MigrationBookkeepingTests {
         obsoleteCallback(null);
         savedCheckpoints();
 
+        job = scanned(); job.observeIndexed(pos,true);
+        job.nextStep.put(pos,1); job.columns.put(pos,256);
+        job.markComplete(pos);
+        check(job.finished() && job.percent()==100, "Consumed priority deque slots do not prolong a completed world migration");
+        check(job.queue.size()==1 && job.queued.isEmpty(), "Logical completion retires pending work without a linear queue search per chunk");
+        check(job.columns.isEmpty() && job.nextStep.isEmpty(), "Completing a priority chunk retires its partial transition obligations");
+        ChunkPos fresh = new ChunkPos(44,55); job.observeIndexed(fresh,true);
+        check(!job.finished() && job.queued.equals(Set.of(fresh)), "Genuine new work still blocks completion alongside an obsolete deque slot");
+
         System.out.println("Migration bookkeeping tests passed: " + assertions + " assertions");
     }
 }

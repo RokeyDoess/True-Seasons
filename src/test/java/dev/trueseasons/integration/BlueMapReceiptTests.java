@@ -2,6 +2,7 @@ package dev.trueseasons.integration;
 
 import com.flowpowered.math.vector.Vector2i;
 import de.bluecolored.bluemap.api.*;
+import de.bluecolored.bluemap.common.rendermanager.RenderTask;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -9,7 +10,7 @@ import java.util.concurrent.*;
 /** Uses the installed BlueMap RenderTask interface to exercise actual receipt concurrency. */
 public final class BlueMapReceiptTests {
     public static final class Api implements RenderManager {
-        @SuppressWarnings("unused") private final Object renderManager = new Object();
+        @SuppressWarnings("unused") private final Object renderManager = new NativeManager();
         public boolean scheduleMapUpdateTask(BlueMapMap map, boolean force) { return false; }
         public boolean scheduleMapUpdateTask(BlueMapMap map, Collection<Vector2i> regions, boolean force) { return false; }
         public boolean scheduleMapPurgeTask(BlueMapMap map) { return false; }
@@ -17,6 +18,12 @@ public final class BlueMapReceiptTests {
         public int renderThreadCount() { return 0; }
         public boolean isRunning() { return true; }
         public void start() {} public void start(int threads) {} public void stop() {}
+    }
+    public static final class NativeManager {
+        private final List<RenderTask> tasks = new ArrayList<>();
+        public boolean scheduleRenderTask(RenderTask task) { return tasks.add(task); }
+        public List<RenderTask> getScheduledRenderTasks() { return List.copyOf(tasks); }
+        public void removeRenderTask(RenderTask task) { tasks.remove(task); task.cancel(); }
     }
     public static final class World {
         int evictions;

@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.1.5"
+version = "0.1.6"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -24,13 +24,16 @@ tasks.register<JavaExec>("coreTest") {
 tasks.check { dependsOn("coreTest") }
 listOf(
     "migrationTest" to "dev.trueseasons.migration.MigrationBookkeepingTests",
+    "regionReadinessTest" to "dev.trueseasons.migration.RegionReadinessTests",
     "generatedSnapshotTest" to "dev.trueseasons.migration.GeneratedChunkSnapshotTests",
     "winterCoverageTest" to "dev.trueseasons.migration.WinterCoveragePolicyTests",
     "commandPresentationTest" to "dev.trueseasons.command.CommandPresentationTests",
     "snowReplenishmentTest" to "dev.trueseasons.snow.SnowReplenishmentTests",
     "snowBreakCooldownTest" to "dev.trueseasons.snow.SnowBreakCooldownTests",
     "snowCompletionTest" to "dev.trueseasons.SnowCompletionTests",
+    "snowMigrationIntentTest" to "dev.trueseasons.snow.SnowMigrationIntentTests",
     "blueMapReliabilityTest" to "dev.trueseasons.integration.BlueMapReliabilityTests",
+    "blueMapRegionTest" to "dev.trueseasons.integration.BlueMapRegionTests",
     "blueMapRecoveryTest" to "dev.trueseasons.integration.BlueMapRecoveryTests",
     "blueMapJournalTest" to "dev.trueseasons.integration.BlueMapJournalTests"
 ).forEach { (taskName, entryPoint) ->

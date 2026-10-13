@@ -1,0 +1,548 @@
+[
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\EGgb2u2OO6.sparkprofile",
+    "bytes": 304301,
+    "sha256": "fcb09f42fceea5037f9f2ab6be0f99867ef0b7c1d9a665a1d04dcdfd6ed92971",
+    "start_utc": "2026-10-13T00:16:51.416000+00:00",
+    "end_utc": "2026-10-13T00:17:54.034000+00:00",
+    "elapsed_ms": 62618,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1200,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.3"
+      }
+    },
+    "tps": {
+      "last1m": 20.00316046601503,
+      "last5m": 19.990155741191085,
+      "last15m": 19.997749859851687
+    },
+    "mspt_last1m": {
+      "mean": 4.747656,
+      "maximum": 48.5415,
+      "median": 3.9948,
+      "p95": 8.1307
+    },
+    "start_local": "2026-10-12T17:16:51.416000-07:00",
+    "end_local": "2026-10-12T17:17:54.034000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 59996.0,
+    "plugin_percent": 17.261150743382892,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 9664.0,
+        "percent": 16.1077405160344
+      },
+      "bluemap_integration": {
+        "sampled_ms": 1828.0,
+        "percent": 3.046869791319421
+      },
+      "map_journal": {
+        "sampled_ms": 1216.0,
+        "percent": 2.0268017867857857
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 80.0,
+        "percent": 0.13334222281485433
+      },
+      "snow_replenishment": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "snow_apply": {
+        "sampled_ms": 16.0,
+        "percent": 0.026668444562970864
+      },
+      "snow_decode": {
+        "sampled_ms": 4.0,
+        "percent": 0.006667111140742716
+      },
+      "coverage_update": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 1084.0,
+        "percent": 1.806787119141276
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 5748.0,
+        "percent": 9.580638709247284
+      },
+      "idle_park": {
+        "sampled_ms": 43896.0,
+        "percent": 73.16487765851056
+      }
+    },
+    "matched_log": "2026-10-12-6.log.gz",
+    "phase": "autumn migration following interrupted winter",
+    "matched_log_bytes": 5225,
+    "matched_log_sha256": "e210968e0a7728e6dea824fc56d2420f479576b04b66709efd25d36b8d1e8cd5",
+    "independent_spark_decoder_verified": true
+  },
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\fGwY7OOKVx.sparkprofile",
+    "bytes": 326977,
+    "sha256": "2043e2444ac6cff85df23ad11caba6c21cc681a31b7d2f9858b2da2ea8bfbd1b",
+    "start_utc": "2026-10-12T23:04:55.488000+00:00",
+    "end_utc": "2026-10-12T23:05:57.823000+00:00",
+    "elapsed_ms": 62335,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1200,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.2"
+      }
+    },
+    "tps": {
+      "last1m": 19.996548262494088,
+      "last5m": 19.9995693826051,
+      "last15m": 20.00005969795597
+    },
+    "mspt_last1m": {
+      "mean": 13.694366333333333,
+      "maximum": 49.5849,
+      "median": 14.3076,
+      "p95": 19.7399
+    },
+    "start_local": "2026-10-12T16:04:55.488000-07:00",
+    "end_local": "2026-10-12T16:05:57.823000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 59988.0,
+    "plugin_percent": 29.719277188771088,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 15792.0,
+        "percent": 26.325265053010604
+      },
+      "bluemap_integration": {
+        "sampled_ms": 2068.0,
+        "percent": 3.4473561378942454
+      },
+      "map_journal": {
+        "sampled_ms": 236.0,
+        "percent": 0.3934120157364806
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 28.0,
+        "percent": 0.04667600186704007
+      },
+      "snow_replenishment": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "snow_apply": {
+        "sampled_ms": 8.0,
+        "percent": 0.013336000533440022
+      },
+      "snow_decode": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "coverage_update": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 108.0,
+        "percent": 0.18003600720144028
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 3232.0,
+        "percent": 5.387744215509769
+      },
+      "idle_park": {
+        "sampled_ms": 41260.0,
+        "percent": 68.7804227512169
+      }
+    },
+    "matched_log": "2026-10-12-5.log.gz",
+    "phase": "active autumn migration",
+    "matched_log_bytes": 6464,
+    "matched_log_sha256": "cf817725640e74682b5c14aba50ec7aefede71e317175aaa5e0f802f00e576f3",
+    "independent_spark_decoder_verified": true
+  },
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\IjK1gxz52X.sparkprofile",
+    "bytes": 318743,
+    "sha256": "282a011dec967a2ede51362c726a3ce921f96adcbb3baf5353f491b2ec496c4f",
+    "start_utc": "2026-10-13T04:38:36.001000+00:00",
+    "end_utc": "2026-10-13T04:39:38.628000+00:00",
+    "elapsed_ms": 62627,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1200,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.4"
+      }
+    },
+    "tps": {
+      "last1m": 20.003617454180414,
+      "last5m": 20.00271401491054,
+      "last15m": 20.000904589801173
+    },
+    "mspt_last1m": {
+      "mean": 4.849710666666667,
+      "maximum": 39.4187,
+      "median": 4.4144,
+      "p95": 6.9556
+    },
+    "start_local": "2026-10-12T21:38:36.001000-07:00",
+    "end_local": "2026-10-12T21:39:38.628000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 60000.0,
+    "plugin_percent": 19.213333333333335,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 9984.0,
+        "percent": 16.64
+      },
+      "bluemap_integration": {
+        "sampled_ms": 3284.0,
+        "percent": 5.473333333333334
+      },
+      "map_journal": {
+        "sampled_ms": 1604.0,
+        "percent": 2.6733333333333333
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 284.0,
+        "percent": 0.47333333333333333
+      },
+      "snow_replenishment": {
+        "sampled_ms": 48.0,
+        "percent": 0.08
+      },
+      "snow_apply": {
+        "sampled_ms": 2456.0,
+        "percent": 4.093333333333334
+      },
+      "snow_decode": {
+        "sampled_ms": 184.0,
+        "percent": 0.30666666666666664
+      },
+      "coverage_update": {
+        "sampled_ms": 972.0,
+        "percent": 1.62
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 1324.0,
+        "percent": 2.2066666666666666
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 224.0,
+        "percent": 0.37333333333333335
+      },
+      "idle_park": {
+        "sampled_ms": 42136.0,
+        "percent": 70.22666666666667
+      }
+    },
+    "matched_log": "2026-10-12-11.log.gz",
+    "phase": "active winter migration",
+    "matched_log_bytes": 5131,
+    "matched_log_sha256": "7d1404ec2ebc4b32c27673c03f0e30fc1108339d821af3f3306ab0adc3422df6",
+    "independent_spark_decoder_verified": true
+  },
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\K1eHg7Rd6L.sparkprofile",
+    "bytes": 266523,
+    "sha256": "efa9484207096820bce41be77ab2aa26cac12a495efcffcc2f61f8764fcdbacb",
+    "start_utc": "2026-10-13T06:06:57.363000+00:00",
+    "end_utc": "2026-10-13T06:07:59.824000+00:00",
+    "elapsed_ms": 62461,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1200,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.5"
+      }
+    },
+    "tps": {
+      "last1m": 19.998062421062127,
+      "last5m": 19.831713342589392,
+      "last15m": 19.943588001306534
+    },
+    "mspt_last1m": {
+      "mean": 5.51193075,
+      "maximum": 41.8045,
+      "median": 4.9563,
+      "p95": 8.3913
+    },
+    "start_local": "2026-10-12T23:06:57.363000-07:00",
+    "end_local": "2026-10-12T23:07:59.824000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 60000.0,
+    "plugin_percent": 18.473333333333333,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 8288.0,
+        "percent": 13.813333333333333
+      },
+      "bluemap_integration": {
+        "sampled_ms": 4804.0,
+        "percent": 8.006666666666666
+      },
+      "map_journal": {
+        "sampled_ms": 2296.0,
+        "percent": 3.8266666666666667
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 588.0,
+        "percent": 0.98
+      },
+      "snow_replenishment": {
+        "sampled_ms": 20.0,
+        "percent": 0.03333333333333333
+      },
+      "snow_apply": {
+        "sampled_ms": 40.0,
+        "percent": 0.06666666666666667
+      },
+      "snow_decode": {
+        "sampled_ms": 4.0,
+        "percent": 0.006666666666666667
+      },
+      "coverage_update": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 1796.0,
+        "percent": 2.993333333333333
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 248.0,
+        "percent": 0.41333333333333333
+      },
+      "idle_park": {
+        "sampled_ms": 40672.0,
+        "percent": 67.78666666666666
+      }
+    },
+    "matched_log": "latest.log",
+    "phase": "active autumn migration",
+    "matched_log_bytes": 28693,
+    "matched_log_sha256": "c296c322699e54b14ec159a7d31b8ebbf0c82047cedac00bd7de6fe77ec195ae",
+    "independent_spark_decoder_verified": true
+  },
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\newnewnew.sparkprofile",
+    "bytes": 179707,
+    "sha256": "07835a5173c7ae858a72b1b7c778ae2ce50310d974073963cfb6b76f0b0d37f7",
+    "start_utc": "2026-10-13T04:28:23.144000+00:00",
+    "end_utc": "2026-10-13T04:29:25.891000+00:00",
+    "elapsed_ms": 62747,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1201,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.4"
+      }
+    },
+    "tps": {
+      "last1m": 19.997361748064577,
+      "last5m": 19.946342510232743,
+      "last15m": 19.981128743034127
+    },
+    "mspt_last1m": {
+      "mean": 3.8985236666666667,
+      "maximum": 29.6047,
+      "median": 3.477,
+      "p95": 6.5516
+    },
+    "start_local": "2026-10-12T21:28:23.144000-07:00",
+    "end_local": "2026-10-12T21:29:25.891000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 59996.0,
+    "plugin_percent": 11.960797386492432,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 1060.0,
+        "percent": 1.7667844522968197
+      },
+      "bluemap_integration": {
+        "sampled_ms": 6016.0,
+        "percent": 10.027335155677045
+      },
+      "map_journal": {
+        "sampled_ms": 348.0,
+        "percent": 0.5800386692446163
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 588.0,
+        "percent": 0.9800653376891793
+      },
+      "snow_replenishment": {
+        "sampled_ms": 4.0,
+        "percent": 0.006667111140742716
+      },
+      "snow_apply": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "snow_decode": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "coverage_update": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 8.0,
+        "percent": 0.013334222281485432
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "idle_park": {
+        "sampled_ms": 41576.0,
+        "percent": 69.29795319687979
+      }
+    },
+    "matched_log": "2026-10-12-10.log.gz",
+    "phase": "completed autumn, map maintenance/drain",
+    "matched_log_bytes": 5295,
+    "matched_log_sha256": "b22d80849a035ec4f6e85a89541a8e69c1d114e636f7117d197f4b6299495d23",
+    "independent_spark_decoder_verified": true
+  },
+  {
+    "profile": "E:\\True Seasons\\spark profiler outputs\\O57EV1YhdZ.sparkprofile",
+    "bytes": 202823,
+    "sha256": "27e9da9bffd11b762cef1fae81004c1986c59f85b3b44dfc3212ed54ba20129f",
+    "start_utc": "2026-10-13T06:04:52.563000+00:00",
+    "end_utc": "2026-10-13T06:05:55.174000+00:00",
+    "elapsed_ms": 62611,
+    "sample_interval_microseconds": 4000,
+    "included_ticks": 1200,
+    "sampler_mode": 0,
+    "sampler_engine": 0,
+    "sources": {
+      "bluemap": {
+        "name": "BlueMap",
+        "version": "5.29"
+      },
+      "trueseasons": {
+        "name": "TrueSeasons",
+        "version": "0.1.5"
+      }
+    },
+    "tps": {
+      "last1m": 20.002193207148174,
+      "last5m": 19.83216801728656,
+      "last15m": 19.94374127196649
+    },
+    "mspt_last1m": {
+      "mean": 4.01886225,
+      "maximum": 40.1431,
+      "median": 3.7191,
+      "p95": 5.7291
+    },
+    "start_local": "2026-10-12T23:04:52.563000-07:00",
+    "end_local": "2026-10-12T23:05:55.174000-07:00",
+    "threads": [
+      "Server thread"
+    ],
+    "sampled_ms": 59992.0,
+    "plugin_percent": 22.50966795572743,
+    "categories": {
+      "migration_engine": {
+        "sampled_ms": 2640.0,
+        "percent": 4.40058674489932
+      },
+      "bluemap_integration": {
+        "sampled_ms": 2728.0,
+        "percent": 4.547272969729297
+      },
+      "map_journal": {
+        "sampled_ms": 84.0,
+        "percent": 0.14001866915588745
+      },
+      "bridge_scheduled": {
+        "sampled_ms": 812.0,
+        "percent": 1.3535138018402453
+      },
+      "snow_replenishment": {
+        "sampled_ms": 7836.0,
+        "percent": 13.061741565542071
+      },
+      "snow_apply": {
+        "sampled_ms": 0,
+        "percent": 0.0
+      },
+      "snow_decode": {
+        "sampled_ms": 3440.0,
+        "percent": 5.734097879717296
+      },
+      "coverage_update": {
+        "sampled_ms": 1496.0,
+        "percent": 2.4936658221096146
+      },
+      "plugin_disk_force": {
+        "sampled_ms": 64.0,
+        "percent": 0.10668089078543806
+      },
+      "plugin_tps_read": {
+        "sampled_ms": 116.0,
+        "percent": 0.1933591145486065
+      },
+      "idle_park": {
+        "sampled_ms": 41024.0,
+        "percent": 68.3824509934658
+      }
+    },
+    "matched_log": "latest.log",
+    "phase": "completed winter, replenishment and map maintenance",
+    "matched_log_bytes": 28693,
+    "matched_log_sha256": "c296c322699e54b14ec159a7d31b8ebbf0c82047cedac00bd7de6fe77ec195ae",
+    "independent_spark_decoder_verified": true
+  }
+]

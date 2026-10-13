@@ -15,6 +15,7 @@ public final class IntegrationManager implements IntegrationAdapter {
         else blueMap = null;
     }
     @Override public void chunkUpdated(Chunk chunk) { if (blueMap != null) blueMap.chunkUpdated(chunk); }
+    @Override public void setRegionReadiness(RegionReadiness readiness) { if (blueMap != null) blueMap.setRegionReadiness(readiness); }
     @Override public void chunkCompleted(Chunk chunk) { if (blueMap != null) blueMap.chunkCompleted(chunk); }
     @Override public void chunkCompleted(Chunk chunk, boolean cleanup) { if (blueMap != null) blueMap.chunkCompleted(chunk, cleanup); }
     @Override public int cleanupPending() { return blueMap == null ? 0 : blueMap.cleanupPending(); }

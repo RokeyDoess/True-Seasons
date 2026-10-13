@@ -8,6 +8,7 @@ import java.util.function.BooleanSupplier;
 import org.bukkit.*;
 import org.bukkit.block.*;
 import org.bukkit.block.data.type.Snow;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.persistence.*;
 import org.bukkit.plugin.Plugin;
 
@@ -16,18 +17,18 @@ public final class SnowReplenishmentTests {
     private static int checks;
     private static final String VERSION = "finished-winter";
     private static final SeasonalSnowService.ReplenishmentPolicy DEFAULT = new SeasonalSnowService.ReplenishmentPolicy(true, true, Set.of(), List.of(), 1);
-    private record Value(PersistentDataType<?, ?> type, Object value) {}
+    record Value(PersistentDataType<?, ?> type, Object value) {}
     private static <T> T proxy(Class<T> type, InvocationHandler handler) { return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, handler)); }
     private static Object identity(Object proxy, String name, Object[] args) {
         return switch (name) { case "equals" -> proxy == args[0]; case "hashCode" -> System.identityHashCode(proxy); case "toString" -> "SnowRefillFixture"; default -> throw new AssertionError("Unexpected API: " + name); };
     }
-    private static final class Column {
+    static final class Column {
         Material support = Material.STONE, target = Material.AIR;
         int height = 64, sky = 15, light, layers = 1;
         boolean survives = true;
         Block ground, above;
     }
-    private static final class Fixture {
+    static final class Fixture {
         final Map<NamespacedKey, Value> metadata = new HashMap<>();
         final Map<Integer, Column> columns = new HashMap<>();
         final List<String> order = new ArrayList<>();
@@ -40,15 +41,16 @@ public final class SnowReplenishmentTests {
         Runnable beforeMutation = () -> {};
         BooleanSupplier stillCurrent = () -> true;
         int failColumn = -1;
-        int maxHeight = 320, heightReads, before, after;
+        int maxHeight = 320, heightReads, ownershipReads, ownershipTouches, formationCalls, before, after;
+        Block oldSnow;
         final PersistentDataContainer pdc;
         final World world;
         final Chunk chunk;
         Fixture() {
             metadata.put(version, new Value(PersistentDataType.STRING, VERSION));
             pdc = proxy(PersistentDataContainer.class, (p, m, a) -> switch (m.getName()) {
-                case "has" -> { Value v = metadata.get(a[0]); yield v != null && (a.length == 1 || v.type.getPrimitiveType().equals(((PersistentDataType<?, ?>) a[1]).getPrimitiveType())); }
-                case "get", "getOrDefault" -> { Value v = metadata.get(a[0]); yield v == null ? (a.length == 3 ? a[2] : null) : v.value; }
+                case "has" -> { if (a[0].equals(owned)) ownershipTouches++; Value v = metadata.get(a[0]); yield v != null && (a.length == 1 || v.type.getPrimitiveType().equals(((PersistentDataType<?, ?>) a[1]).getPrimitiveType())); }
+                case "get", "getOrDefault" -> { if (a[0].equals(owned)) { ownershipReads++; ownershipTouches++; } Value v = metadata.get(a[0]); yield v == null ? (a.length == 3 ? a[2] : null) : v.value; }
                 case "set" -> { if (a[0].equals(owned)) order.add("ownership"); metadata.put((NamespacedKey) a[0], new Value((PersistentDataType<?, ?>) a[1], a[2])); yield null; }
                 case "remove" -> { metadata.remove(a[0]); yield null; }
                 default -> identity(p, m.getName(), a);
@@ -63,7 +65,7 @@ public final class SnowReplenishmentTests {
             });
             chunk = proxy(Chunk.class, (p, m, a) -> switch (m.getName()) {
                 case "isLoaded" -> loaded; case "getWorld" -> world; case "getX" -> 4; case "getZ" -> -3; case "getPersistentDataContainer" -> pdc;
-                case "getBlock" -> { Column c = column((int) a[0] | ((int) a[2] << 4)); yield (int) a[1] == c.height + 1 ? c.above : c.ground; }
+                case "getBlock" -> { Column c = column((int) a[0] | ((int) a[2] << 4)); yield oldSnow != null && (int) a[1] < c.height ? oldSnow : (int) a[1] == c.height + 1 ? c.above : c.ground; }
                 default -> identity(p, m.getName(), a);
             });
         }
@@ -76,9 +78,16 @@ public final class SnowReplenishmentTests {
                 });
                 c.above = proxy(Block.class, (p, m, a) -> switch (m.getName()) {
                     case "getType" -> c.target; case "getY" -> c.height + 1; case "getLightFromSky" -> (byte) c.sky; case "getLightFromBlocks" -> (byte) c.light;
+                    case "getBlockData" -> c.target == Material.SNOW
+                            ? proxy(Snow.class, (data, method, values) -> method.getName().equals("getLayers") ? c.layers : identity(data, method.getName(), values))
+                            : proxy(BlockData.class, (data, method, values) -> method.getName().equals("getMaterial") ? c.target : identity(data, method.getName(), values));
                     case "canPlace" -> { check(a[0] == snowData, "Vanilla snow support check uses the actual planned snow data"); yield c.survives; }
                     case "setType" -> {
                         if (id == failColumn) throw new IllegalStateException("Simulated block write failure");
+                        if (a[0] == Material.AIR) {
+                            check(before == 1 && after == 0, "Render intent precedes actual migration snow removal");
+                            order.add("remove"); c.target = Material.AIR; yield null;
+                        }
                         check(a[0] == Material.SNOW && a[1].equals(false), "Replenishment writes exactly one snow layer without physics");
                         check(before == 1 && after == 0, "Map intent precedes writes and final revision follows them");
                         Value value = metadata.get(owned);
@@ -92,7 +101,7 @@ public final class SnowReplenishmentTests {
         }
         SeasonalSnowService.Result refill(int... samples) throws IOException { return refill(DEFAULT, Long.MAX_VALUE, samples); }
         SeasonalSnowService.Result refill(SeasonalSnowService.ReplenishmentPolicy policy, long deadline, int... samples) throws IOException {
-            return snow.replenishColumns(chunk, VERSION, samples, policy, snowData, target -> { permitMutation.accept(target); return allowed; },
+            return snow.replenishColumns(chunk, VERSION, samples, policy, snowData, target -> { formationCalls++; permitMutation.accept(target); return allowed; },
                 c -> { before++; order.add("intent"); beforeMutation.run(); }, c -> { after++; order.add("revision"); }, deadline, stillCurrent);
         }
     }
@@ -145,6 +154,32 @@ public final class SnowReplenishmentTests {
         f.stillCurrent = () -> active[0]; f.beforeMutation = () -> active[0] = false;
         check(f.refill(0).placed() == 0 && f.before == 1 && f.after == 1 && !f.metadata.containsKey(f.owned) && lateChanged.column(0).target == Material.AIR,
                 "Change during map-intent callback retires that intent without claiming or writing snow");
+        byte[] malformed = new byte[]{9, 4, 3};
+        f = new Fixture(); f.metadata.put(f.owned, new Value(PersistentDataType.BYTE_ARRAY, malformed));
+        f.column(0).support = Material.SNOW; f.column(1).light = 10; f.column(2).survives = false;
+        check(f.refill(0, 1, 2).placed() == 0 && f.ownershipTouches == 0 && f.formationCalls == 0 && f.order.isEmpty(),
+                "Already snowy and unsuitable samples never read/decode ownership, plan events, serialize or write");
+        check(f.metadata.get(f.owned).value == malformed, "A no-op sample preserves malformed ownership bytes untouched");
+        f = new Fixture(); f.metadata.put(f.owned, new Value(PersistentDataType.BYTE_ARRAY, malformed));
+        try { f.refill(0); throw new AssertionError("Eligible target must reject unknown ownership schema"); }
+        catch (IOException expected) {
+            check(f.ownershipReads == 1 && f.formationCalls == 0 && f.order.isEmpty() && f.column(0).target == Material.AIR,
+                    "Eligible malformed ownership fails once before formation events, intent or physical changes");
+            check(f.metadata.get(f.owned).value == malformed, "Rejected ownership bytes are never rewritten or discarded");
+        }
+        f = new Fixture(); f.metadata.put(f.owned, new Value(PersistentDataType.STRING, "unknown"));
+        f.column(0).support = Material.SNOW;
+        check(f.refill(0).placed() == 0 && f.ownershipTouches == 0, "A no-op sample does not touch malformed ownership type");
+        f.column(0).support = Material.STONE;
+        try { f.refill(0); throw new AssertionError("Eligible target must reject wrong ownership type"); }
+        catch (IOException expected) { check(f.formationCalls == 0 && f.before == 0 && f.after == 0, "Eligible wrong ownership type fails safely before any event or writes"); }
+        f = new Fixture(); f.refill(0, 1);
+        check(f.ownershipReads == 1, "A useful multi-column batch decodes ownership exactly once");
+        f = new Fixture(); SnowColumns held = new SnowColumns(); held.put(0, 63);
+        byte[] heldBytes = held.encode(); f.metadata.put(f.owned, new Value(PersistentDataType.BYTE_ARRAY, heldBytes));
+        f.oldSnow = proxy(Block.class, (p, m, a) -> m.getName().equals("getType") ? Material.SNOW : identity(p, m.getName(), a));
+        check(f.refill(0).placed() == 0 && f.formationCalls == 0 && f.before == 0 && f.metadata.get(f.owned).value == heldBytes,
+                "Lazy decoding still preserves owned snow beneath a new roof and blocks ambiguous new ownership");
         System.out.println("Snow replenishment tests passed: " + checks + " assertions");
     }
     private static void check(boolean condition, String message) { checks++; if (!condition) throw new AssertionError(message); }

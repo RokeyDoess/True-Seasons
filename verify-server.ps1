@@ -1,9 +1,9 @@
-param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1')
+param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1', [switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
 $taskSource = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\test server')).Path
 $taskRun = Join-Path $PSScriptRoot 'run/verification'
 if (Test-Path -LiteralPath $taskRun) { throw 'Verification folder already exists. Rename it before starting a fresh verification.' }
-& (Join-Path $PSScriptRoot 'build.ps1') -JdkDirectory $JdkDirectory
+if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -JdkDirectory $JdkDirectory }
 New-Item -ItemType Directory -Path $taskRun,(Join-Path $taskRun 'plugins') | Out-Null
 foreach ($taskName in @('libraries','cache','versions','world','config','bluemap','plugins')) {
     Copy-Item -LiteralPath (Join-Path $taskSource $taskName) -Destination $taskRun -Recurse -Force
@@ -27,9 +27,9 @@ enable-query=false
 max-players=1
 '@)
 foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -Filter 'TrueSeasons-*.jar') {
-    if ($taskOldJar.Name -ne 'TrueSeasons-0.1.5.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+    if ($taskOldJar.Name -ne 'TrueSeasons-0.1.6.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.5.jar') -Destination (Join-Path $taskRun 'plugins')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.6.jar') -Destination (Join-Path $taskRun 'plugins')
 $taskProbe = Join-Path $PSScriptRoot 'build/probe'
 New-Item -ItemType Directory -Force -Path $taskProbe | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbe 'plugin.yml'), @'

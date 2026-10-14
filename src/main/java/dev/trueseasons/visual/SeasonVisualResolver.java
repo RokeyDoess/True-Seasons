@@ -10,11 +10,14 @@ public final class SeasonVisualResolver {
     private final Map<String, List<String>> families = new LinkedHashMap<>();
     private final Map<String, Map<Season, SeasonVisualProfile>> palettes = new HashMap<>();
     private final SeasonClimatePolicy climate;
+    private final boolean enabled;
+    private final String fingerprint;
     public SeasonVisualResolver(YamlConfiguration config) {
         this(config, SeasonClimatePolicy.ALL);
     }
     public SeasonVisualResolver(YamlConfiguration config, SeasonClimatePolicy climate) {
         this.climate = Objects.requireNonNull(climate);
+        enabled = config.getBoolean("enabled", true);
         var section = config.getConfigurationSection("families");
         if (section != null) for (String family : section.getKeys(false)) families.put(family, section.getStringList(family));
         Set<String> names = new LinkedHashSet<>(families.keySet()); names.add("temperate");
@@ -27,6 +30,7 @@ public final class SeasonVisualResolver {
             }
             palettes.put(name, seasons);
         }
+        fingerprint = computeFingerprint();
     }
     private static int color(String value) {
         if (!value.matches("[0-9a-fA-F]{6}")) throw new IllegalArgumentException("Expected six-digit RGB: " + value);
@@ -39,4 +43,20 @@ public final class SeasonVisualResolver {
         }
         return palettes.get(family).get(climate.paletteSeason(season, biomeKey));
     }
+    public boolean enabled() { return enabled; }
+    public boolean applies(Season season, String biomeKey) { return enabled && climate.applies(season, biomeKey); }
+    public String fingerprint() {
+        return fingerprint;
+    }
+    private String computeFingerprint() {
+        String value = enabled + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature();
+        try {
+            return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+    @Override public boolean equals(Object other) {
+        return other instanceof SeasonVisualResolver resolver && fingerprint.equals(resolver.fingerprint);
+    }
+    @Override public int hashCode() { return fingerprint.hashCode(); }
 }

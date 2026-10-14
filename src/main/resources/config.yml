@@ -8,6 +8,8 @@ migration:
   max-chunks-per-tick: 1
   max-millis-per-tick: 3.0
   pause-below-tps: 18.5
+  # Loaded player-nearby snowstorm radius only; never reorders region migration.
+  player-radius-chunks: 4
   # Complete one saved region before moving to the next, independent of players.
   # Read region headers again periodically to include externally generated chunks.
   rescan-seconds: 300
@@ -16,5 +18,5 @@ migration:
 climate:
   # Match fragments of biome registry keys. [] permits winter in all biomes.
   winter-excluded-biome-fragments: [desert, badlands, savanna, jungle, warm_ocean]
-  # Exclusions for planned summer grass and leaf colors (not displayed yet).
+  # Cold biomes keep their normal colours during summer.
   summer-excluded-biome-fragments: [snowy, frozen, ice_spikes, grove, jagged_peaks, cold_ocean]

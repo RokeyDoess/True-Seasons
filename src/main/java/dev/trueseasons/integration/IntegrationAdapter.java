@@ -2,6 +2,8 @@ package dev.trueseasons.integration;
 
 import org.bukkit.Chunk;
 import java.util.UUID;
+import java.util.function.Supplier;
+import dev.trueseasons.visual.SeasonalVisualState;
 
 /** Future DH support implements its own adapter; core never imports DH types. */
 public interface IntegrationAdapter extends AutoCloseable {
@@ -10,6 +12,7 @@ public interface IntegrationAdapter extends AutoCloseable {
         boolean ready(UUID world, int regionX, int regionZ);
     }
     default void setRegionReadiness(RegionReadiness readiness) {}
+    default void setVisuals(Supplier<SeasonalVisualState> visuals) {}
     void chunkUpdated(Chunk chunk);
     /** Called after all changes and seasonal metadata for this chunk are complete. */
     void chunkCompleted(Chunk chunk);

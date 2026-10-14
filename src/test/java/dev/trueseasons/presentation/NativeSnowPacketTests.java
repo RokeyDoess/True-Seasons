@@ -3,6 +3,9 @@ package dev.trueseasons.presentation;
 import io.netty.buffer.*;
 import io.netty.channel.embedded.EmbeddedChannel;
 import dev.trueseasons.climate.SeasonClimatePolicy;
+import dev.trueseasons.api.Season;
+import dev.trueseasons.visual.SeasonVisualResolver;
+import org.bukkit.configuration.file.YamlConfiguration;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.logging.Logger;
@@ -13,7 +16,7 @@ public final class NativeSnowPacketTests {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
-        registryAndClimate(); palettesAndRefresh(); climateExclusions();
+        registryAndClimate(); palettesAndRefresh(); climateExclusions(); seasonalColors();
         System.out.println("Native snow packet tests passed: " + assertions + " assertions");
         Class.forName("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -129,6 +132,69 @@ public final class NativeSnowPacketTests {
         compound.getMethod("putInt", String.class, int.class).invoke(effects, "grass_color", 1193046);
         compound.getMethod("put", String.class, type("net.minecraft.nbt.Tag")).invoke(tag, "effects", effects);
         return tag;
+    }
+    private static void seasonalColors() throws Exception {
+        var config = new YamlConfiguration();
+        for (Season season : Season.values()) config.set("palettes.temperate." + season.key(),
+            List.of("83B957", season == Season.AUTUMN ? "D98637" : "68AE48"));
+        var policy = new SeasonClimatePolicy(SeasonClimatePolicy.HOT, SeasonClimatePolicy.COLD);
+        var visuals = new SeasonVisualResolver(config, policy);
+        YamlConfiguration ordered = new YamlConfiguration();
+        for (String family : List.of("first", "second")) {
+            ordered.set("families." + family, List.of("forest"));
+            for (Season season : Season.values()) ordered.set("palettes." + family + "." + season.key(),
+                List.of("83B957", family.equals("first") ? "AA6633" : "DD9933"));
+        }
+        for (Season season : Season.values()) ordered.set("palettes.temperate." + season.key(), List.of("83B957", "D98637"));
+        var before = new SeasonVisualResolver(ordered, policy);
+        ordered.set("families", null); ordered.set("families.second", List.of("forest")); ordered.set("families.first", List.of("forest"));
+        var after = new SeasonVisualResolver(ordered, policy);
+        check(!before.equals(after) && !before.fingerprint().equals(after.fingerprint()), "Overlapping family order changes require a new client palette");
+        check(before.resolve(Season.AUTUMN,"minecraft:forest").foliageRgb()!=after.resolve(Season.AUTUMN,"minecraft:forest").foliageRgb(), "Palette selection honours family priority");
+        var handler = new NativeSnowPresentation.ClimateHandler(new PaperBiomePackets(Map.of()), Logger.getAnonymousLogger(), policy, () -> visuals);
+        var channel = new EmbeddedChannel(handler);
+        Object forest = biome(.7f, true), desert = biome(2f, false), frozen = biome(-.5f, true);
+        Object copy = call(forest, "copy");
+        channel.writeOutbound(registry(List.of(entry("minecraft:forest", Optional.of(forest)),
+            entry("minecraft:desert", Optional.of(desert)), entry("minecraft:snowy_plains", Optional.of(frozen)))));
+        List<?> entries = (List<?>) call(wireRoundTrip(channel.readOutbound()), "entries");
+        check(entries.size() == 21, "All seasonal banks and native snow banks fit the configured client registry");
+        check(forest.equals(copy), "Color preparation never mutates the authoritative biome payload");
+        for (Season season : Season.values()) {
+            Object colored = decodeBiome(((Optional<?>) call(entries.get((2 + season.ordinal()) * 3), "data")).orElseThrow());
+            var expected = visuals.resolve(season, "minecraft:forest");
+            check((int) colored.getClass().getMethod("getGrassColor", double.class, double.class).invoke(colored, 0d, 0d) == expected.grassRgb(), "Vanilla biome codec applies configured grass for " + season);
+            check((int) call(colored, "getFoliageColor") == expected.foliageRgb(), "Vanilla biome codec applies configured leaf tint for " + season);
+            check((int) call(colored, "getDryFoliageColor") == expected.foliageRgb(), "Dry-foliage tint matches configured leaves for " + season);
+            check((float) call(colored, "getBaseTemperature") == .7f, "Color aliases preserve original climate for " + season);
+        }
+        int[] original = new int[64]; for (int i=0;i<64;i++) original[i]=i%3;
+        ByteBuf packed=Unpooled.buffer(); BiomeWireCodec.writeBiomes(packed,original,3,false,3);
+        byte[] wire=new byte[packed.readableBytes()];packed.readBytes(wire);packed.release();
+        channel.writeOutbound(biomePacket(0,0,wire));channel.readOutbound(); // Biome-only updates do not introduce unseen chunks into the cache.
+        ByteBuf section=Unpooled.buffer();section.writeShort(0).writeShort(0).writeByte(0).writeByte(0).writeBytes(wire);
+        byte[] source=new byte[section.readableBytes()];section.readBytes(source);section.release();
+        channel.writeOutbound(chunk(chunkData(source),0,0));channel.readOutbound();
+        handler.setPresentation(false,Season.AUTUMN,policy);
+        Object autumn=channel.readOutbound();int[] autumnIds=ids(autumn);
+        for(int i=0;i<64;i++)check(autumnIds[i]==original[i]+12,"Autumn tint routing cell "+i);
+        check(Arrays.equals(autumnIds,nativeIds(autumn,21)),"Vanilla palette accepts the enlarged seasonal registry");
+        handler.setPresentation(true,Season.WINTER,policy);
+        Object winter=channel.readOutbound();int[] winterIds=ids(winter);
+        for(int i=0;i<64;i++)check(winterIds[i]==original[i]+(original[i]==1?0:18),"Winter color/native snow routing preserves hot biomes "+i);
+        handler.setPresentation(false,Season.SUMMER,policy);
+        int[] summerIds=ids(channel.readOutbound());
+        for(int i=0;i<64;i++)check(summerIds[i]==original[i]+(original[i]==2?0:9),"Summer tint leaves cold biomes vanilla "+i);
+        handler.setPresentation(false,null,policy);
+        check(Arrays.equals(ids(channel.readOutbound()),original),"Disabling seasonal colors restores original IDs without loading terrain");
+        // Test global-palette width separately: enlarged registries can cross several bit boundaries.
+        int[] many=new int[64];for(int i=0;i<64;i++)many[i]=i%12;
+        packed=Unpooled.buffer();BiomeWireCodec.writeBiomes(packed,many,12,false,12);
+        byte[] direct=new byte[packed.readableBytes()];packed.readBytes(direct);packed.release();
+        byte[] mapped=BiomeWireCodec.biomes(direct,12,84,id->id+48);
+        int[] decoded=nativePaletteIds(mapped,84);
+        for(int i=0;i<64;i++)check(decoded[i]==many[i]+48,"Native decoder reads seasonal global palette cell "+i);
+        channel.finishAndReleaseAll();
     }
     private static Object entry(String id, Optional<?> data) throws Exception { return type("net.minecraft.core.RegistrySynchronization$PackedRegistryEntry").getConstructor(type("net.minecraft.resources.Identifier"), Optional.class).newInstance(identifier(id), data); }
     private static Object registry(List<?> entries) throws Exception {

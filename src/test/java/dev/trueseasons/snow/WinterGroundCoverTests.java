@@ -42,15 +42,23 @@ public final class WinterGroundCoverTests {
         final NamespacedKey key = new NamespacedKey(plugin,"ground_cover_v1");
         final PersistentDataContainer pdc = proxy(PersistentDataContainer.class, (p,m,a) -> switch(m.getName()) {
             case "has" -> { Value v=metadata.get(a[0]); yield v != null && (a.length == 1 || v.type == a[1]); }
-            case "get" -> { Value v=metadata.get(a[0]); yield v == null ? null : v.value; }
+            case "get", "getOrDefault" -> { Value v=metadata.get(a[0]); yield v == null ? (a.length == 3 ? a[2] : null) : v.value; }
             case "set" -> { order.add("snapshot"); metadata.put((NamespacedKey)a[0],new Value((PersistentDataType<?,?>)a[1],a[2])); yield null; }
             case "remove" -> { metadata.remove(a[0]); yield null; } default -> identity(p,m.getName(),a);
         });
         final World world = proxy(World.class, (p,m,a) -> switch(m.getName()) {
-            case "getMinHeight" -> -64; case "getMaxHeight" -> 320; default -> identity(p,m.getName(),a);
+            case "getMinHeight" -> -64; case "getMaxHeight" -> 320; case "hasStorm", "isChunkLoaded" -> true;
+            case "getHighestBlockAt" -> {
+                int column = ((int)a[0] & 15) | (((int)a[1] & 15) << 4);
+                int highest = terrain.entrySet().stream().filter(row -> Math.floorDiv(row.getKey(),1000) == column
+                    && row.getValue().getMaterial() != Material.AIR).mapToInt(row -> Math.floorMod(row.getKey(),1000)).max().orElse(64);
+                yield block(column, highest);
+            }
+            default -> identity(p,m.getName(),a);
         });
         final Chunk chunk = proxy(Chunk.class, (p,m,a) -> switch(m.getName()) {
             case "getPersistentDataContainer" -> pdc; case "getWorld" -> world;
+            case "isLoaded" -> true; case "getX", "getZ" -> 0;
             case "getBlock" -> { check((int)a[0] >= 0 && (int)a[0] < 16 && (int)a[2] >= 0 && (int)a[2] < 16,"Only recorded local coordinates are accessed"); yield block((int)a[0] | ((int)a[2] << 4),(int)a[1]); }
             default -> identity(p,m.getName(),a);
         });
@@ -60,7 +68,8 @@ public final class WinterGroundCoverTests {
         Block block(int column,int y) {
             int cell=column*1000+y;
             return proxy(Block.class, (p,m,a) -> switch(m.getName()) {
-                case "getY" -> y; case "getX" -> column&15; case "getZ" -> column>>4; case "getChunk" -> chunk;
+                case "getY" -> y; case "getX" -> column&15; case "getZ" -> column>>4; case "getChunk" -> chunk; case "getWorld" -> world;
+                case "getLightFromSky" -> (byte)15; case "getLightFromBlocks" -> (byte)0;
                 case "getType" -> terrain.getOrDefault(cell,data("minecraft:air")).getMaterial();
                 case "getBlockData" -> terrain.getOrDefault(cell,data("minecraft:air"));
                 case "getRelative" -> block(column,y + (a[0] == BlockFace.UP ? 1 : a[0] == BlockFace.DOWN ? -1 : 0));

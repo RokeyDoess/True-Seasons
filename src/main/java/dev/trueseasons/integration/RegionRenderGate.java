@@ -23,6 +23,14 @@ final class RegionRenderGate {
     }
     void retain(Set<Region> pending) { changes.keySet().retainAll(pending); }
     private long serial(Region region) { Change change = changes.get(region); return change == null ? 0 : change.serial; }
+    boolean paletteReady(Region region, Map<Region, Batch> batches, IntegrationAdapter.RegionReadiness readiness,
+            Set<Region> staging, long now, long quietMillis) {
+        Batch batch = batches.get(region);
+        if (batch != null) return state(batch, readiness, staging, now, quietMillis) == State.READY;
+        long captured = serial(region);
+        // Readiness can create the first physical intent in a previously clean region.
+        return !staging.contains(region) && readiness.ready(region.world(), region.x(), region.z()) && captured == serial(region);
+    }
     Map<Region, Batch> snapshot(RenderLedger ledger, Map<ChunkKey, String> readable, Set<ChunkKey> deleted) {
         Map<Region, List<Revision>> members = new LinkedHashMap<>();
         ledger.entries().forEach((key, entry) -> members.computeIfAbsent(key.region(), ignored -> new ArrayList<>()).add(new Revision(key, entry.token())));

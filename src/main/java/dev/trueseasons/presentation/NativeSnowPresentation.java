@@ -9,6 +9,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.Function;
+import dev.trueseasons.visual.SeasonVisualResolver;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.*;
@@ -17,12 +19,14 @@ import org.bukkit.event.*;
 import org.bukkit.event.player.*;
 import org.bukkit.plugin.java.JavaPlugin;
 
-/** Native client snowfall using private climate aliases, with no block, weather or server-biome writes. */
+/** Seasonal client colors and native snowfall using private biome aliases; saved world data stays untouched. */
 public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private static final String HANDLER = "trueseasons_native_biomes";
     private final JavaPlugin plugin;
     private final Predicate<World> winter;
     private final Supplier<SeasonClimatePolicy> climate;
+    private final Function<World, Season> colors;
+    private final Supplier<SeasonVisualResolver> visuals;
     private final PaperBiomePackets packets;
     private final Map<UUID, Viewer> viewers = new ConcurrentHashMap<>();
     private final Set<UUID> warned = new HashSet<>();
@@ -33,8 +37,13 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         this(plugin, winter, () -> SeasonClimatePolicy.ALL);
     }
     public NativeSnowPresentation(JavaPlugin plugin, Predicate<World> winter, Supplier<SeasonClimatePolicy> climate) throws ReflectiveOperationException {
+        this(plugin, winter, climate, world -> null, () -> null);
+    }
+    public NativeSnowPresentation(JavaPlugin plugin, Predicate<World> winter, Supplier<SeasonClimatePolicy> climate,
+            Function<World, Season> colors, Supplier<SeasonVisualResolver> visuals) throws ReflectiveOperationException {
         this.plugin = Objects.requireNonNull(plugin); this.winter = Objects.requireNonNull(winter);
         this.climate = Objects.requireNonNull(climate);
+        this.colors = Objects.requireNonNull(colors); this.visuals = Objects.requireNonNull(visuals);
         packets = new PaperBiomePackets();
         Bukkit.getPluginManager().registerEvents(this, plugin);
         for (Player player : Bukkit.getOnlinePlayers()) warnReconnect(player);
@@ -52,7 +61,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 if (closed) { viewers.remove(id); channel.eventLoop().execute(() -> existing.retire()); }
                 return;
             }
-            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get());
+            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals);
             channel.pipeline().addBefore("packet_handler", HANDLER, handler);
             UUID id = event.getConnection().getProfile().getId();
             viewers.put(id, new Viewer(channel, handler));
@@ -87,12 +96,36 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         if (viewer == null) { warnReconnect(player); return; }
         if (!viewer.channel.isActive()) return;
         boolean desired = !closed && winter.test(player.getWorld());
+        Season desiredColors = closed ? null : colors.apply(player.getWorld());
         SeasonClimatePolicy policy = climate.get();
-        if (viewer.handler.requested == desired && policy.sameWinter(viewer.handler.requestedPolicy)) return;
+        SeasonVisualResolver nextVisuals = visuals.get();
+        // Biome effects are immutable after configuration. A palette edit uses
+        // Paper's normal reconfiguration handshake rather than asking for reconnects.
+        if (viewer.handler.reconfigurationRequested && !viewer.handler.reconfigurationStarted
+                && System.currentTimeMillis() - viewer.handler.reconfigurationRequestedAt >= 5000) {
+            viewer.handler.reconfigurationRequested = false;
+            viewer.handler.failedVisuals = nextVisuals;
+            plugin.getLogger().warning("Changed seasonal colors require " + player.getName()
+                + " to reconnect: this connection could not reenter configuration");
+            player.sendMessage("TrueSeasons: please reconnect once to load the changed seasonal colors.");
+        }
+        if (viewer.handler.originalCount > 0 && nextVisuals != null
+                && !nextVisuals.equals(viewer.handler.deliveredVisuals) && !viewer.handler.reconfigurationRequested) {
+            if (!nextVisuals.equals(viewer.handler.failedVisuals)) {
+                viewer.handler.reconfigurationRequested = true;
+                viewer.handler.reconfigurationStarted = false;
+                viewer.handler.reconfigurationRequestedAt = System.currentTimeMillis();
+                player.getConnection().reenterConfiguration();
+                return;
+            }
+        }
+        if (viewer.handler.requested == desired && viewer.handler.requestedColors == desiredColors
+                && policy.equals(viewer.handler.requestedPolicy)) return;
         viewer.handler.requested = desired;
+        viewer.handler.requestedColors = desiredColors;
         viewer.handler.requestedPolicy = policy;
         Viewer current = viewer;
-        current.channel.eventLoop().execute(() -> current.handler.setClimate(desired, policy));
+        current.channel.eventLoop().execute(() -> current.handler.setPresentation(desired, desiredColors, policy));
     }
     private Viewer recoverViewer(Player player) {
         try {
@@ -109,9 +142,11 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     }
     private void warnReconnect(Player player) {
         if (!player.getConnection().isConnected()) return;
+        try { if (!packets.channel(player.getConnection()).isActive()) return; }
+        catch (ReflectiveOperationException failure) { plugin.getLogger().log(Level.WARNING, "Could not inspect seasonal connection", failure); return; }
         if (!warned.add(player.getUniqueId())) return;
-        plugin.getLogger().warning("Native snowfall requires " + player.getName() + " to reconnect: their biome registry predates this plugin instance");
-        player.sendMessage("TrueSeasons: please reconnect once to enable native winter snowfall.");
+        plugin.getLogger().warning("Seasonal colors and snowfall require " + player.getName() + " to reconnect: their biome registry predates this plugin instance");
+        player.sendMessage("TrueSeasons: please reconnect once to enable seasonal colors and native winter snowfall.");
     }
     public int activeViewers() { return (int) viewers.values().stream().filter(viewer -> viewer.handler.requested).count(); }
 
@@ -138,42 +173,74 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private final Map<Long, byte[]> originals = new HashMap<>();
         private ChannelHandlerContext context;
         private volatile int originalCount;
+        private int registrySize;
         private volatile boolean retired;
         private boolean winter, configuring;
         private volatile boolean requested;
         private volatile SeasonClimatePolicy requestedPolicy;
+        private volatile Season requestedColors;
+        private volatile SeasonVisualResolver deliveredVisuals;
+        private volatile boolean reconfigurationRequested;
+        private volatile boolean reconfigurationStarted;
+        private long reconfigurationRequestedAt;
+        private SeasonVisualResolver failedVisuals;
+        private final Supplier<SeasonVisualResolver> visuals;
+        private Season colors;
         private SeasonClimatePolicy policy;
         private List<String> biomeKeys = List.of();
         private boolean[] allowed = new boolean[0];
+        private int[] mapping = new int[0];
         public ClimateHandler(PaperBiomePackets packets, Logger logger) { this(packets, logger, SeasonClimatePolicy.ALL); }
         public ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy) {
+            this(packets, logger, policy, () -> null);
+        }
+        public ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy, Supplier<SeasonVisualResolver> visuals) {
             this.packets = packets; this.logger = logger; this.policy = Objects.requireNonNull(policy);
+            this.visuals = Objects.requireNonNull(visuals);
         }
         private void rebuildClimate() {
             allowed = new boolean[biomeKeys.size()];
             for (int id = 0; id < allowed.length; id++) allowed[id] = policy.applies(Season.WINTER, biomeKeys.get(id));
+            rebuildMapping();
         }
         private boolean winterBiome(int id) { return allowed[id]; }
+        private int mappedBiome(int id) {
+            return mapping[id];
+        }
+        private void rebuildMapping() {
+            mapping = new int[biomeKeys.size()];
+            for (int id = 0; id < mapping.length; id++) {
+                boolean snowy = winter && winterBiome(id);
+                boolean colored = colors != null && deliveredVisuals != null && deliveredVisuals.enabled()
+                    && policy.applies(colors, biomeKeys.get(id));
+                mapping[id] = id + originalCount * (colored ? snowy && colors == Season.WINTER ? 6 : 2 + colors.ordinal() : snowy ? 1 : 0);
+            }
+        }
         @Override public void handlerAdded(ChannelHandlerContext context) { this.context = context; }
-        private void retire() { setWinter(false); retired = true; originals.clear(); }
+        private void retire() { setPresentation(false, null, policy); retired = true; originals.clear(); }
         private boolean canBind() { return originalCount > 0 && !retired; }
         public void setWinter(boolean desired) {
             setClimate(desired, policy);
         }
         public void setClimate(boolean desired, SeasonClimatePolicy next) {
-            boolean changed = !policy.sameWinter(next);
-            if (winter == desired && !changed) return;
+            setPresentation(desired, colors, next);
+        }
+        public void setPresentation(boolean desired, Season colorSeason, SeasonClimatePolicy next) {
+            boolean changed = !policy.equals(next);
+            if (winter == desired && colors == colorSeason && !changed) return;
             if (changed) { policy = next; rebuildClimate(); }
             winter = desired;
+            colors = colorSeason;
+            rebuildMapping();
             if (configuring || originalCount == 0 || originals.isEmpty() || context == null || !context.channel().isActive()) return;
             try {
                 // Bound individual packets; no world access and no cache mutation.
                 Map<Long, byte[]> batch = new HashMap<>();
                 for (var entry : originals.entrySet()) {
                     batch.put(entry.getKey(), entry.getValue());
-                    if (batch.size() == 64) { context.write(packets.refresh(batch, originalCount, winter, this::winterBiome)); batch.clear(); }
+                    if (batch.size() == 64) { context.write(packets.refresh(batch, originalCount, registrySize, this::mappedBiome)); batch.clear(); }
                 }
-                if (!batch.isEmpty()) context.write(packets.refresh(batch, originalCount, winter, this::winterBiome));
+                if (!batch.isEmpty()) context.write(packets.refresh(batch, originalCount, registrySize, this::mappedBiome));
                 context.flush();
             } catch (ReflectiveOperationException | RuntimeException failure) { fail(failure); }
         }
@@ -183,10 +250,15 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         }
         private Object rewrite(Object message) throws ReflectiveOperationException {
             if (retired && originalCount == 0) return message;
-            PaperBiomePackets.RegistryResult registry = packets.registry(message);
-            if (registry != null) { originalCount = registry.originalCount(); biomeKeys = registry.biomeKeys(); rebuildClimate(); originals.clear(); return registry.packet(); }
+            SeasonVisualResolver palette = visuals.get();
+            PaperBiomePackets.RegistryResult registry = packets.registry(message, palette);
+            if (registry != null) {
+                deliveredVisuals = palette; originalCount = registry.originalCount(); registrySize = registry.registrySize();
+                biomeKeys = registry.biomeKeys(); rebuildClimate(); originals.clear(); reconfigurationRequested = false;
+                return registry.packet();
+            }
             String simple = message.getClass().getSimpleName();
-            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; originals.clear(); }
+            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; reconfigurationStarted = true; originals.clear(); }
             if (simple.equals("ClientboundLoginPacket")) configuring = false;
             if (simple.equals("ClientboundLoginPacket") || simple.equals("ClientboundRespawnPacket")) originals.clear();
             if (simple.equals("ClientboundBundlePacket")) {
@@ -196,12 +268,12 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             }
             if (originalCount == 0) return message;
             if (packets.isChunk(message)) {
-                var mapped = packets.chunk(message, originalCount, winter, this::winterBiome);
+                var mapped = packets.chunk(message, originalCount, registrySize, this::mappedBiome);
                 if (!retired) originals.put(packets.chunkKey(message), mapped.originalBiomes());
                 return mapped.packet();
             }
             if (packets.isBiomes(message)) {
-                var mapped = packets.biomes(message, originalCount, winter, this::winterBiome);
+                var mapped = packets.biomes(message, originalCount, registrySize, this::mappedBiome);
                 if (!retired) for (var entry : mapped.originals().entrySet()) if (originals.containsKey(entry.getKey())) originals.put(entry.getKey(), entry.getValue());
                 return mapped.packet();
             }

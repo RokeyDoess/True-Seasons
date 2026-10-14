@@ -100,5 +100,14 @@ public final class SnowReplenishmentService implements Listener, AutoCloseable {
         loaded = List.copyOf(next);
         if (loaded.isEmpty()) cursor = 0;
     }
+    /** Share player-clearing grace with ahead-of-region storm accumulation. */
+    int[] availableColumns(Chunk chunk, int[] columns) {
+        return settings.get().snowPlayerBreakCooldownSeconds <= 0 ? columns
+            : cooldowns.available(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ(), columns);
+    }
+    boolean columnsAvailable(Chunk chunk, int[] columns) {
+        return settings.get().snowPlayerBreakCooldownSeconds <= 0
+            || cooldowns.allAvailable(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ(), columns);
+    }
     @Override public void close() { closed = true; loaded = List.of(); cooldowns.clear(); HandlerList.unregisterAll(this); }
 }

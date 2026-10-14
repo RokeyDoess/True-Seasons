@@ -13,7 +13,8 @@ foreach ($taskOutput in @($taskClasses,$taskTests)) {
     if (-not $taskResolvedOutput.StartsWith([System.IO.Path]::GetFullPath($taskBuild) + [System.IO.Path]::DirectorySeparatorChar)) { throw 'Build output escaped build directory' }
     if (Test-Path -LiteralPath $taskResolvedOutput) { Remove-Item -LiteralPath $taskResolvedOutput -Recurse -Force }
 }
-New-Item -ItemType Directory -Force -Path $taskClasses,$taskTests,(Join-Path $taskBuild 'libs') | Out-Null
+$taskTestTemp = Join-Path $taskBuild 'test-temp'
+New-Item -ItemType Directory -Force -Path $taskClasses,$taskTests,$taskTestTemp,(Join-Path $taskBuild 'libs') | Out-Null
 $taskLibs = @(Get-ChildItem -LiteralPath (Join-Path $taskServer 'libraries') -Recurse -Filter '*.jar' | Where-Object {
     ($_.Name -notlike 'paper-api-*' -or $_.Name -eq 'paper-api-26.3.build.177-stable.jar') -and $_.Name -notlike 'adventure-*-4.*.jar'
 } | ForEach-Object FullName)
@@ -33,22 +34,22 @@ $taskTestSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src/te
 Write-JavaArgs $taskArgs (@('--release','25','-encoding','UTF-8','-classpath',"$taskClasses;$taskClasspath",'-d',$taskTests) + $taskTestSources)
 & (Join-Path $JdkDirectory 'bin/javac.exe') "@$taskArgs"
 if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed' }
-& (Join-Path $JdkDirectory 'bin/java.exe') '-cp' "$taskTests;$taskClasses;$taskClasspath" 'dev.trueseasons.CoreTests'
+& (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskClasspath" 'dev.trueseasons.CoreTests'
 if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
-foreach ($taskTestMain in @('dev.trueseasons.migration.MigrationBookkeepingTests','dev.trueseasons.migration.RegionReadinessTests','dev.trueseasons.migration.RegionOrderTests','dev.trueseasons.migration.IndexHydrationBudgetTests','dev.trueseasons.climate.SeasonClimateTests','dev.trueseasons.snow.WinterGroundCoverTests','dev.trueseasons.migration.WinterCoveragePolicyTests','dev.trueseasons.command.CommandPresentationTests','dev.trueseasons.snow.SnowReplenishmentTests','dev.trueseasons.snow.SnowBreakCooldownTests','dev.trueseasons.migration.GeneratedChunkSnapshotTests','dev.trueseasons.SnowCompletionTests','dev.trueseasons.snow.SnowMigrationIntentTests','dev.trueseasons.integration.BlueMapReliabilityTests','dev.trueseasons.integration.BlueMapRegionTests','dev.trueseasons.integration.BlueMapRecoveryTests','dev.trueseasons.integration.BlueMapReceiptTests','dev.trueseasons.integration.BlueMapJournalTests')) {
-    & (Join-Path $JdkDirectory 'bin/java.exe') '-cp' "$taskTests;$taskClasses;$taskClasspath" $taskTestMain
+foreach ($taskTestMain in @('dev.trueseasons.migration.MigrationBookkeepingTests','dev.trueseasons.migration.RegionReadinessTests','dev.trueseasons.migration.RegionOrderTests','dev.trueseasons.migration.IndexHydrationBudgetTests','dev.trueseasons.climate.SeasonClimateTests','dev.trueseasons.snow.WinterGroundCoverTests','dev.trueseasons.snow.LocalWinterSnowTests','dev.trueseasons.migration.WinterCoveragePolicyTests','dev.trueseasons.command.CommandPresentationTests','dev.trueseasons.snow.SnowReplenishmentTests','dev.trueseasons.snow.SnowBreakCooldownTests','dev.trueseasons.migration.GeneratedChunkSnapshotTests','dev.trueseasons.SnowCompletionTests','dev.trueseasons.snow.SnowMigrationIntentTests','dev.trueseasons.integration.BlueMapReliabilityTests','dev.trueseasons.integration.BlueMapRegionTests','dev.trueseasons.integration.BlueMapRecoveryTests','dev.trueseasons.integration.BlueMapReceiptTests','dev.trueseasons.integration.BlueMapJournalTests','dev.trueseasons.integration.BlueMapSeasonalColorsTests','dev.trueseasons.integration.BlueMapVisualQueueTests')) {
+    & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskClasspath" $taskTestMain
     if ($LASTEXITCODE -ne 0) { throw "$taskTestMain failed" }
 }
 $taskNms = Join-Path $taskServer 'versions/26.3/paper-26.3.jar'
-& (Join-Path $JdkDirectory 'bin/java.exe') '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.NativeSnowPacketTests'
+& (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.NativeSnowPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Native snow packet tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.8.jar'
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.9.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
 if ($Install) {
     foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'TrueSeasons-*.jar') {
-        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.8.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.9.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
     }
-    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.8.jar') -Force
+    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.9.jar') -Force
 }
 Write-Output "Built and verified: $taskJar"

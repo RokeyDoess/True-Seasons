@@ -27,7 +27,7 @@ final class BlueMapRenderBridge {
         cancelTask = taskType.getMethod("cancel"); description = taskType.getMethod("getDescription");
     }
     Ticket submit(BlueMapMap map, Collection<Vector2i> regions) throws ReflectiveOperationException {
-        Object nativeMap = map.getClass().getMethod("map").invoke(map);
+        Object nativeMap = nativeMap(map);
         Object strategy = strategyType.getMethod("fixed", boolean.class).invoke(null, true);
         Object delegate = Class.forName("de.bluecolored.bluemap.common.rendermanager.MapUpdateTask", true, loader)
                 .getConstructor(mapType, Collection.class, strategyType).newInstance(nativeMap, regions, strategy);
@@ -47,6 +47,7 @@ final class BlueMapRenderBridge {
         boolean accepted = (boolean) scheduleTask.invoke(manager, ticket.proxy);
         return accepted ? ticket : null;
     }
+    static Object nativeMap(BlueMapMap map) throws ReflectiveOperationException { return map.getClass().getMethod("map").invoke(map); }
     boolean scheduled(Ticket ticket) throws ReflectiveOperationException {
         return ((List<?>) scheduledTasks.invoke(manager)).contains(ticket.proxy);
     }

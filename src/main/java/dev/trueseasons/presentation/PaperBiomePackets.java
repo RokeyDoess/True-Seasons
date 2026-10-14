@@ -5,6 +5,9 @@ import java.lang.reflect.*;
 import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.IntPredicate;
+import java.util.function.IntUnaryOperator;
+import dev.trueseasons.api.Season;
+import dev.trueseasons.visual.SeasonVisualResolver;
 import org.bukkit.Bukkit;
 import io.papermc.paper.connection.PlayerCommonConnection;
 
@@ -37,8 +40,11 @@ public final class PaperBiomePackets {
         this.authoritative = authoritative == null ? packAuthoritativeBiomes() : Map.copyOf(authoritative);
     }
 
-    public record RegistryResult(Object packet, int originalCount, List<String> biomeKeys) {}
+    public record RegistryResult(Object packet, int originalCount, List<String> biomeKeys, int registrySize) {}
     public RegistryResult registry(Object packet) throws ReflectiveOperationException {
+        return registry(packet, null);
+    }
+    public RegistryResult registry(Object packet, SeasonVisualResolver visuals) throws ReflectiveOperationException {
         if (!registryPacket.isInstance(packet)) return null;
         Object key = call(packet, "registry");
         if (!call(key, "identifier").toString().equals("minecraft:worldgen/biome")) return null;
@@ -60,8 +66,37 @@ public final class PaperBiomePackets {
             Object alias = type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, aliasName);
             expanded.add(entryConstructor.newInstance(alias, Optional.of(cold)));
         }
+        if (visuals != null) {
+            // All season banks are delivered once during configuration. Switching
+            // seasons then changes only the client's already-loaded biome palettes.
+            for (int bank = 0; bank < 5; bank++) for (Object entry : entries) {
+                String biome = call(entry, "id").toString();
+                Season season = bank == 4 ? Season.WINTER : Season.values()[bank];
+                String aliasName = "trueseasons:" + (bank == 4 ? "snow_color" : "color_" + season.key()) + "/" + biome.replace(':', '/');
+                if (identifiers.contains(aliasName)) throw new IllegalStateException("Reserved client biome alias already exists: " + aliasName);
+                Object tag = ((Optional<?>) call(entry, "data")).orElse(null);
+                if (tag == null) tag = authoritative.get(biome);
+                if (tag == null || !compound.isInstance(tag)) throw new IllegalStateException("Cannot materialize biome " + biome);
+                Object colored = call(tag, "copy");
+                Object effects = compound.getMethod("getCompoundOrEmpty", String.class).invoke(colored, "effects");
+                effects = call(effects, "copy");
+                var profile = visuals.resolve(season, biome);
+                compound.getMethod("putInt", String.class, int.class).invoke(effects, "grass_color", profile.grassRgb());
+                compound.getMethod("putInt", String.class, int.class).invoke(effects, "foliage_color", profile.foliageRgb());
+                compound.getMethod("putInt", String.class, int.class).invoke(effects, "dry_foliage_color", profile.foliageRgb());
+                compound.getMethod("putString", String.class, String.class).invoke(effects, "grass_color_modifier", "none");
+                compound.getMethod("put", String.class, type("net.minecraft.nbt.Tag")).invoke(colored, "effects", effects);
+                if (bank == 4) {
+                    compound.getMethod("putFloat", String.class, float.class).invoke(colored, "temperature", -1.0f);
+                    compound.getMethod("putBoolean", String.class, boolean.class).invoke(colored, "has_precipitation", true);
+                    compound.getMethod("putString", String.class, String.class).invoke(colored, "temperature_modifier", "none");
+                }
+                Object alias = type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, aliasName);
+                expanded.add(entryConstructor.newInstance(alias, Optional.of(colored)));
+            }
+        }
         List<String> biomeKeys = new ArrayList<>(); for (Object entry : entries) biomeKeys.add(call(entry, "id").toString());
-        return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size(), List.copyOf(biomeKeys));
+        return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size(), List.copyOf(biomeKeys), expanded.size());
     }
 
     public boolean isChunk(Object packet) { return chunkPacket.isInstance(packet); }
@@ -77,8 +112,11 @@ public final class PaperBiomePackets {
         return chunk(packet, count, winter, id -> true);
     }
     public ChunkResult chunk(Object packet, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
+        return chunk(packet, count, Math.multiplyExact(count, 2), id -> id + (winter && winterBiome.test(id) ? count : 0));
+    }
+    public ChunkResult chunk(Object packet, int count, int registrySize, IntUnaryOperator mapping) throws ReflectiveOperationException {
         Object old = call(packet, "chunkData");
-        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, winter, winterBiome);
+        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping);
         Object copy = chunkDataConstructor.newInstance(heightmaps.get(old), mapped.sections(), blockEntities.get(old));
         extraPackets.set(copy, extraPackets.get(old));
         chunkData.getMethod("setReady", boolean.class).invoke(copy, true);
@@ -89,11 +127,14 @@ public final class PaperBiomePackets {
         return biomes(packet, count, winter, id -> true);
     }
     public BiomeResult biomes(Object packet, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
+        return biomes(packet, count, Math.multiplyExact(count, 2), id -> id + (winter && winterBiome.test(id) ? count : 0));
+    }
+    public BiomeResult biomes(Object packet, int count, int registrySize, IntUnaryOperator mapping) throws ReflectiveOperationException {
         List<?> data = (List<?>) call(packet, "chunkBiomeData"); List<Object> copies = new ArrayList<>(); Map<Long, byte[]> originals = new HashMap<>();
         for (Object entry : data) {
             Object pos = call(entry, "pos"); byte[] buffer = (byte[]) call(entry, "buffer");
             originals.put(positionKey(pos), buffer.clone());
-            copies.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(buffer, count, winter, winterBiome)));
+            copies.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(buffer, count, registrySize, mapping)));
         }
         return new BiomeResult(biomeConstructor.newInstance(List.copyOf(copies)), originals);
     }
@@ -101,10 +142,13 @@ public final class PaperBiomePackets {
         return refresh(originals, count, winter, id -> true);
     }
     public Object refresh(Map<Long, byte[]> originals, int count, boolean winter, IntPredicate winterBiome) throws ReflectiveOperationException {
+        return refresh(originals, count, Math.multiplyExact(count, 2), id -> id + (winter && winterBiome.test(id) ? count : 0));
+    }
+    public Object refresh(Map<Long, byte[]> originals, int count, int registrySize, IntUnaryOperator mapping) throws ReflectiveOperationException {
         List<Object> data = new ArrayList<>(); Constructor<?> posConstructor = type("net.minecraft.world.level.ChunkPos").getConstructor(int.class, int.class);
         for (var entry : originals.entrySet()) {
             Object pos = posConstructor.newInstance((int) (long) entry.getKey(), (int) (entry.getKey() >> 32));
-            data.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(entry.getValue(), count, winter, winterBiome)));
+            data.add(biomeDataConstructor.newInstance(pos, BiomeWireCodec.biomes(entry.getValue(), count, registrySize, mapping)));
         }
         return biomeConstructor.newInstance(List.copyOf(data));
     }

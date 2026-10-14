@@ -34,6 +34,7 @@ public final class SeasonClimatePolicy {
         return season == Season.WINTER ? Season.SUMMER : Season.WINTER;
     }
     public boolean sameWinter(SeasonClimatePolicy other) { return other != null && winter.equals(other.winter); }
+    public String signature() { return winter + "/" + summer; }
     @Override public boolean equals(Object other) {
         return other instanceof SeasonClimatePolicy policy && winter.equals(policy.winter) && summer.equals(policy.summer);
     }

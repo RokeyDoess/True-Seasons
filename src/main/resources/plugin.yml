@@ -1,9 +1,10 @@
 name: TrueSeasons
-version: 0.1.8
+version: 0.1.9
 main: dev.trueseasons.TrueSeasonsPlugin
 api-version: '26.3'
-description: Calendar seasons with reversible snow and full-world migrations.
-author: Ricky
+description: Calendar seasons with seasonal colors and reversible winter snow.
+author: RokeyDoess
+website: https://github.com/RokeyDoess/True-Seasons
 softdepend: [BlueMap]
 commands:
   trueseasons:

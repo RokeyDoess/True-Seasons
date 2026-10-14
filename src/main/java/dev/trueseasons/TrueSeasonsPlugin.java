@@ -8,8 +8,10 @@ import dev.trueseasons.integration.*;
 import dev.trueseasons.migration.ChunkMigrationEngine;
 import dev.trueseasons.snow.SeasonalSnowService;
 import dev.trueseasons.snow.SnowReplenishmentService;
+import dev.trueseasons.snow.LocalWinterSnowService;
 import dev.trueseasons.state.StateStore;
 import dev.trueseasons.visual.SeasonVisualResolver;
+import dev.trueseasons.visual.SeasonalVisualState;
 import dev.trueseasons.weather.WeatherService;
 import dev.trueseasons.presentation.NativeSnowPresentation;
 import java.io.*;
@@ -31,9 +33,12 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     private WeatherService weather;
     private NativeSnowPresentation presentation;
     private SnowReplenishmentService replenishment;
+    private LocalWinterSnowService localSnow;
+    private volatile SeasonalVisualState visualState;
     private Season season;
     private String version;
     private long lastCalendar;
+    private long lastVisualWorlds;
 
     @Override public void onEnable() {
         try {
@@ -45,12 +50,14 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             refreshSeason(false);
             snow = new SeasonalSnowService(this, this::settings, () -> season == Season.WINTER && !state.cleanup && !state.clean);
             integrations = new IntegrationManager(this, this::settings);
+            integrations.setVisuals(this::visualState);
             engine = new ChunkMigrationEngine(this);
             integrations.setRegionReadiness(engine::regionReady);
             Bukkit.getPluginManager().registerEvents(snow, this);
             weather = new WeatherService(this);
             presentation = new NativeSnowPresentation(this, world -> settings.weather && settings.winterSnowfall
-                && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean, () -> settings.climate);
+                && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean, () -> settings.climate,
+                world -> visualState.active(world.getUID()) ? visualState.season() : null, () -> visuals);
             Bukkit.getPluginManager().registerEvents(weather, this);
             replenishment = new SnowReplenishmentService(this,snow,this::settings,this::version,
                 world -> season==Season.WINTER&&eligible(world)&&!state.cleanup&&!state.clean
@@ -59,6 +66,9 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
                     &&settings.enabled&&settings.snow&&settings.weather&&settings.winterSnowfall&&world.hasStorm()
                     &&engine.worldFinished(world)&&engine.currentTps()>=settings.minTps,
                 integrations::chunkUpdated,chunk -> integrations.chunkCompleted(chunk,false));
+            localSnow = new LocalWinterSnowService(this, snow, this::settings, this::version, this::winterEnabled,
+                world -> winterEnabled(world) && !state.paused && !engine.worldFinished(world) && engine.currentTps() >= settings.minTps,
+                engine::globalCoverageColumns, replenishment, integrations::chunkUpdated, chunk -> {});
             for (World world : Bukkit.getWorlds()) engine.addWorld(world);
             SeasonsCommand command = new SeasonsCommand(this);
             Objects.requireNonNull(getCommand("trueseasons")).setExecutor(command);
@@ -67,7 +77,8 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             Bukkit.getScheduler().runTaskTimer(this, () -> {
                 try {
                     if (System.currentTimeMillis() - lastCalendar > 60_000) { refreshSeason(true); lastCalendar = System.currentTimeMillis(); }
-                    engine.tick(); integrations.tick(); weather.tick(); presentation.tick(); replenishment.tick();
+                    if (System.currentTimeMillis() - lastVisualWorlds >= 1000) { updateVisualState(); lastVisualWorlds = System.currentTimeMillis(); }
+                    engine.tick(); integrations.tick(); weather.tick(); presentation.tick(); replenishment.tick(); localSnow.tick();
                 } catch (Exception failure) {
                     getLogger().log(Level.SEVERE, "Stopping migrations after a state/integration failure", failure);
                     state.paused = true;
@@ -82,6 +93,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     @Override public void onDisable() {
         if (engine != null) engine.close();
         if (replenishment != null) replenishment.close();
+        if (localSnow != null) localSnow.close();
         if (presentation != null) presentation.close();
         if (weather != null) try { weather.close(); } catch (Exception failure) { getLogger().log(Level.SEVERE, "Could not restore temporary weather", failure); }
         if (integrations != null) try { integrations.close(); } catch (Exception failure) { getLogger().log(Level.SEVERE, "Could not save map queue", failure); }
@@ -95,6 +107,8 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     public ChunkMigrationEngine engine() { return engine; }
     public WeatherService weather() { return weather; }
     public SnowReplenishmentService replenishment() { return replenishment; }
+    public LocalWinterSnowService localSnow() { return localSnow; }
+    public SeasonalVisualState visualState() { return visualState; }
     public Season currentSeason() { return season; }
     public String version() { return version; }
     public boolean eligible(World world) {
@@ -109,6 +123,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
         String nextVersion = (state.override == null ? calendar.version() : "manual-" + next) + "-r" + state.revision + "-snow4";
         if (nextVersion.equals(version)) return;
         Season previous = season; season = next; version = nextVersion;
+        updateVisualState();
         if(!state.winterVersion.equals(version)) { state.winterVersion=version; state.winterColumns=0; persist(); }
         if (migrate && !state.cleanup && !state.clean) {
             engine.restart();
@@ -129,13 +144,25 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             ||!settings.worlds.equals(next.worlds)||settings.groundCover!=next.groundCover||!settings.climate.sameWinter(next.climate);
         boolean areasChanged=settings.playerRadius!=next.playerRadius;
         settings = next; visuals = nextVisuals;
+        updateVisualState();
         if(areasChanged)engine.invalidatePlayerAreas();
         if(snowRulesChanged)state.revision++;
         persist(); refreshSeason(true);
     }
     public void startCleanup() {
         if (state.cleanup) return;
-        state.cleanup = true; state.clean = false; state.paused = false; persist(); engine.restart(); weather.close(); presentation.tick();
+        state.cleanup = true; state.clean = false; state.paused = false; updateVisualState(); persist(); engine.restart(); weather.close(); presentation.tick();
+    }
+    private boolean winterEnabled(World world) {
+        return season == Season.WINTER && eligible(world) && !state.cleanup && !state.clean
+            && settings.enabled && settings.snow && settings.weather && settings.winterSnowfall && settings.snowTransition;
+    }
+    private void updateVisualState() {
+        Set<UUID> enabledWorlds = new HashSet<>();
+        if (!state.cleanup && !state.clean && settings.enabled && visuals.enabled())
+            for (World world : Bukkit.getWorlds()) if (eligible(world)) enabledWorlds.add(world.getUID());
+        var next = new SeasonalVisualState(visuals, season, enabledWorlds);
+        if (!next.equals(visualState)) visualState = next;
     }
     @Override public Season getCurrentSeason(World world) { return season; }
     @Override public double getSeasonProgress(World world) { return state.override == null ? settings.calendar.at(Instant.now()).progress() : 0; }

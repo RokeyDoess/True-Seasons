@@ -11,6 +11,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerJoinEvent;
+import dev.trueseasons.api.Season;
+import dev.trueseasons.climate.SeasonClimatePolicy;
+import dev.trueseasons.visual.SeasonVisualResolver;
+import org.bukkit.configuration.file.YamlConfiguration;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Called only inside the disposable real-server verification; creates no player or world/chunk. */
 public final class NativeSnowRuntimeProbe {
@@ -28,7 +33,11 @@ public final class NativeSnowRuntimeProbe {
         PlayerConfigurationConnection api = (PlayerConfigurationConnection) listener.getClass().getField("paperConnection").get(listener);
         PaperBiomePackets packets = new PaperBiomePackets();
         if (packets.channel(api) != channel) throw new AssertionError("Actual Paper configuration connection channel lookup");
-        NativeSnowPresentation service = new NativeSnowPresentation(probe, world -> true);
+        YamlConfiguration config = new YamlConfiguration();
+        for (Season season : Season.values()) config.set("palettes.temperate." + season.key(), List.of("83B957", "D98637"));
+        AtomicReference<SeasonVisualResolver> palettes = new AtomicReference<>(new SeasonVisualResolver(config));
+        NativeSnowPresentation service = new NativeSnowPresentation(probe, world -> true, () -> SeasonClimatePolicy.ALL,
+            world -> Season.AUTUMN, palettes::get);
         try {
             service.configure(new PlayerConnectionInitialConfigureEvent(api));
             Object biomeKey = type("net.minecraft.resources.ResourceKey").getMethod("createRegistryKey", type("net.minecraft.resources.Identifier")).invoke(null, identifier("minecraft:worldgen/biome"));
@@ -37,7 +46,7 @@ public final class NativeSnowRuntimeProbe {
             channel.writeOutbound(packet);
             Object rewritten = channel.readOutbound();
             List<?> entries = (List<?>) call(rewritten, "entries");
-            if (entries.size() != 2) throw new AssertionError("Initial configuration handler emitted native alias");
+            if (entries.size() != 7) throw new AssertionError("Initial configuration handler emitted all color and snow aliases");
             if (!((Optional<?>) call(entries.getFirst(), "data")).isEmpty()) throw new AssertionError("Original known-pack entry retained");
             Object data = ((Optional<?>) call(entries.get(1), "data")).orElseThrow();
             if ((float) data.getClass().getMethod("getFloatOr", String.class, float.class).invoke(data, "temperature", 999.0f) != -1.0f) throw new AssertionError("Authoritative missing known-pack payload materialized and cold");
@@ -51,9 +60,38 @@ public final class NativeSnowRuntimeProbe {
                 throw new AssertionError("Disconnecting player must not trigger reconnect warning/state lookup: " + method.getName());
             });
             service.join(new PlayerJoinEvent(leaving, (net.kyori.adventure.text.Component) null));
+            int[] requests = {0}, notices = {0};
+            PlayerGameConnection refusesConfiguration = (PlayerGameConnection) Proxy.newProxyInstance(PlayerGameConnection.class.getClassLoader(),
+                new Class<?>[]{PlayerGameConnection.class}, (proxy, method, arguments) -> switch (method.getName()) {
+                    case "isConnected" -> true;
+                    case "reenterConfiguration" -> { requests[0]++; yield null; }
+                    default -> throw new AssertionError("Unexpected reload connection call: " + method.getName());
+                });
+            UUID id = api.getProfile().getId();
+            Player viewer = (Player) Proxy.newProxyInstance(Player.class.getClassLoader(), new Class<?>[]{Player.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "getConnection" -> refusesConfiguration;
+                    case "getUniqueId" -> id;
+                    case "getName" -> "PaletteReloadProbe";
+                    case "getWorld" -> Bukkit.getWorlds().getFirst();
+                    case "sendMessage" -> { notices[0]++; yield null; }
+                    default -> throw new AssertionError("Unexpected reload viewer call: " + method.getName());
+                });
+            service.join(new PlayerJoinEvent(viewer, (net.kyori.adventure.text.Component) null));
+            config.set("palettes.temperate.autumn", List.of("83B957", "CC6633"));
+            palettes.set(new SeasonVisualResolver(config));
+            service.join(new PlayerJoinEvent(viewer, (net.kyori.adventure.text.Component) null));
+            if (requests[0] != 1) throw new AssertionError("Palette reload must request configuration once");
+            Object handler = channel.pipeline().get("trueseasons_native_biomes");
+            Field requestedAt = handler.getClass().getDeclaredField("reconfigurationRequestedAt"); requestedAt.setAccessible(true);
+            requestedAt.setLong(handler, System.currentTimeMillis() - 6000);
+            service.join(new PlayerJoinEvent(viewer, (net.kyori.adventure.text.Component) null));
+            service.join(new PlayerJoinEvent(viewer, (net.kyori.adventure.text.Component) null));
+            if (requests[0] != 1 || notices[0] != 1) throw new AssertionError("Refused configuration needs one notice, without repeated requests");
             probe.getLogger().info("PASS: Native snowfall actual Paper configuration channel and authoritative known-pack climate materialization");
             probe.getLogger().info("PASS: Disconnecting player is ignored before reconnect warning or seasonal state lookup");
-            return 6;
+            probe.getLogger().info("PASS: Seasonal palette edits recover when a plugin stack refuses client reconfiguration");
+            return 8;
         } finally { service.close(); channel.finishAndReleaseAll(); }
     }
     private static Class<?> type(String name) throws ClassNotFoundException { return Class.forName(name); }

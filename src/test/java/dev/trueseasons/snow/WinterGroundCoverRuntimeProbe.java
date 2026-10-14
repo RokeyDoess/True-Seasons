@@ -79,6 +79,36 @@ public final class WinterGroundCoverRuntimeProbe {
             snow.applyStep(chunk,Season.WINTER,stamp,false,1,()->{});
             if(lower.getType()!=Material.POPPY||pdc.has(plants))throw new AssertionError("Sheltered flowers remain unchanged");checks++;
             snow.apply(chunk,Season.SPRING,"cover-runtime-roof-cleanup",true);
+            String localVersion="cover-local-runtime";
+            int localColumn=PlayerNeighborhood.columnAt(0,chunk.getX(),chunk.getZ(),localVersion);
+            int outsideColumn=PlayerNeighborhood.columnAt(64,chunk.getX(),chunk.getZ(),localVersion);
+            for(int c:new int[]{localColumn,outsideColumn})for(int at=y;at<chunk.getWorld().getMaxHeight();at++){
+                Block b=chunk.getBlock(c&15,at,c>>4);original.putIfAbsent(b,b.getState());biomes.putIfAbsent(b,b.getBiome());
+                b.setType(Material.AIR,false);b.setBiome(Biome.PLAINS);
+            }
+            Block localSupport=chunk.getBlock(localColumn&15,y,localColumn>>4),localPlant=localSupport.getRelative(BlockFace.UP);
+            Block outsideSupport=chunk.getBlock(outsideColumn&15,y,outsideColumn>>4);
+            localSupport.setType(Material.GRASS_BLOCK,false);localPlant.setType(Material.POPPY,false);outsideSupport.setType(Material.GRASS_BLOCK,false);
+            boolean previousStorm=chunk.getWorld().hasStorm();int previousRain=chunk.getWorld().getWeatherDuration(),previousClear=chunk.getWorld().getClearWeatherDuration();
+            try{
+                chunk.getWorld().setStorm(true);
+                var localMethod=SeasonalSnowService.class.getDeclaredMethod("accumulateLocalColumns",Chunk.class,String.class,int.class,int[].class,
+                    java.util.function.Consumer.class,java.util.function.Consumer.class,long.class,java.util.function.BooleanSupplier.class);localMethod.setAccessible(true);
+                int[] writes={0};
+                result=(SeasonalSnowService.Result)localMethod.invoke(snow,chunk,localVersion,64,new int[]{localColumn,outsideColumn},
+                    (java.util.function.Consumer<Chunk>)c->writes[0]++,(java.util.function.Consumer<Chunk>)c->{},Long.MAX_VALUE,(java.util.function.BooleanSupplier)()->true);
+                if(result.placed()!=1||result.removed()!=1||writes[0]!=1||localPlant.getType()!=Material.SNOW)throw new AssertionError("Local storm hides a plant and places owned real snow");checks++;
+                if(outsideSupport.getRelative(BlockFace.UP).getType()!=Material.AIR)throw new AssertionError("Local storm cannot exceed the shared coverage rank");checks++;
+                if(pdc.has(version)||pdc.has(pending)||pdc.has(cursor))throw new AssertionError("Local accumulation never certifies migration progress");checks++;
+                result=snow.applyStep(chunk,Season.WINTER,localVersion,false,256,()->{});
+                if(!result.complete()||localPlant.getType()!=Material.SNOW)throw new AssertionError("Background region completes without removing current local snow");checks++;
+                result=snow.apply(chunk,Season.SPRING,"cover-local-cleanup",true);
+                if(!result.complete()||localPlant.getType()!=Material.POPPY||pdc.has(plants)||pdc.has(owned))throw new AssertionError("Leaving winter restores locally hidden plants and retires ownership");checks++;
+            }finally{
+                chunk.getWorld().setStorm(previousStorm);chunk.getWorld().setWeatherDuration(previousRain);chunk.getWorld().setClearWeatherDuration(previousClear);
+            }
+            // Put the primary fixture back in its baseline state before the species matrix.
+            for(Block b:original.keySet())b.setType(Material.AIR,false);
             // Read the production allowlist reflectively because Paper separates plugin loaders.
             Class<?> policy=Class.forName("dev.trueseasons.snow.WinterGroundCover",false,SeasonalSnowService.class.getClassLoader());
             var policyField=policy.getDeclaredField("PLANTS");policyField.setAccessible(true);

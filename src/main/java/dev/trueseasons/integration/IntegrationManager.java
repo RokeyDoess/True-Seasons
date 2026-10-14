@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 import java.util.UUID;
 import org.bukkit.Chunk;
 import org.bukkit.plugin.java.JavaPlugin;
+import dev.trueseasons.visual.SeasonalVisualState;
 
 public final class IntegrationManager implements IntegrationAdapter {
     private final IntegrationAdapter blueMap;
@@ -16,6 +17,7 @@ public final class IntegrationManager implements IntegrationAdapter {
     }
     @Override public void chunkUpdated(Chunk chunk) { if (blueMap != null) blueMap.chunkUpdated(chunk); }
     @Override public void setRegionReadiness(RegionReadiness readiness) { if (blueMap != null) blueMap.setRegionReadiness(readiness); }
+    @Override public void setVisuals(Supplier<SeasonalVisualState> visuals) { if (blueMap != null) blueMap.setVisuals(visuals); }
     @Override public void chunkCompleted(Chunk chunk) { if (blueMap != null) blueMap.chunkCompleted(chunk); }
     @Override public void chunkCompleted(Chunk chunk, boolean cleanup) { if (blueMap != null) blueMap.chunkCompleted(chunk, cleanup); }
     @Override public int cleanupPending() { return blueMap == null ? 0 : blueMap.cleanupPending(); }

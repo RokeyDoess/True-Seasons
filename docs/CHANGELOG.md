@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.9
+
+- Add seasonal grass and leaf colors, including autumn tones for biome-tinted leaves. Spruce and other leaves with fixed colors keep their normal appearance.
+- Improve BlueMap updates during season changes and cleanup, with saved progress after a restart.
+- Restore nearby winter snow accumulation, limited by the shared transition percentage without changing region migration order.
+- Keep player-broken snow's refill delay during local accumulation.
+- Update the author credit to RokeyDoess and add a clickable GitHub link in plugin details.
+
+Known limitations: BlueMap grass and leaf colors may remain vanilla after rendering. Autumn uses one foliage tint per biome; per-tree color variation, colored birch and red autumn cherry leaves are not included. Leaves with fixed colors keep their usual appearance.
+
 ## 0.1.8
 
 - Fix spring restoration getting stuck when dirt beneath saved plants naturally becomes grass or mycelium. Restore plants without changing the current ground.
@@ -58,4 +68,4 @@
 - Add gradual nearby snow accumulation and an introductory winter storm.
 - Preserve custom settings during upgrades.
 
-Player priority and scattered accumulation were replaced by region-by-region updates in 0.1.7.
+Background updates follow region order since 0.1.7. Nearby gradual snow accumulation returned in 0.1.9 without changing that order.

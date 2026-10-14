@@ -1,14 +1,15 @@
 # True Seasons
 
-Calendar seasons and reversible winter snow for Paper servers.
+Seasonal colors and reversible winter snow for Paper servers.
 
 True Seasons brings Minecraft's native snowfall to winter and adds snow to exposed terrain, roofs and leaf canopies. Exposed grass, flowers and leaf litter disappear beneath the snow and return when winter ends.
 
-**Development release: 0.1.8.** Winter snow and weather are available. Seasonal grass and leaf colors are still in development.
+**Latest prerelease: 0.1.9.** Seasonal colors, winter snow and weather are available.
 
 ## Features
 
 - Follow a real-world calendar or choose a season manually.
+- Give grass and biome-tinted leaves seasonal colors, including warm autumn tones. Spruce keeps its normal color.
 - Update terrain one region at a time, even without players online. Player movement does not change the order.
 - Resume saved progress after a restart, without generating unexplored terrain.
 - Restore winter's temporary changes while preserving player replacements and existing snow.
@@ -17,11 +18,19 @@ True Seasons brings Minecraft's native snowfall to winter and adds snow to expos
 
 Grass, ferns, flowers, bushes, mushrooms and leaf litter are saved before removal. Tall plants keep both halves and their properties. Saplings, leaves, crops and sheltered plants stay in place. Snow requires a surface that supports a normal Minecraft snow layer.
 
-Deserts, badlands, savannas, jungles and other hot biomes skip winter snow and snowfall by default. Saved biomes and natural snow remain unchanged. Cold-biome summer exclusions are configured for the planned seasonal colors; those colors are not displayed yet.
+Deserts, badlands, savannas, jungles and other hot biomes skip winter snow and snowfall by default. Cold biomes keep their normal colors during summer. Saved biomes and natural snow remain unchanged.
+
+## Current limitations
+
+- Seasonal grass and leaf colors may remain vanilla on BlueMap even after rendering finishes. This does not affect terrain and snow updates.
+- Autumn colors are chosen by biome, with no separate yellow, orange or red choice for each tree and no gradual autumn color transition.
+- Birch and leaves with fixed colors, including poplar, cherry and pale oak, keep their usual appearance. Colored birch and red autumn cherry trees are planned.
+
+Colors are sent to players without changing saved biomes or leaf blocks. No resource pack is required.
 
 ## Install
 
-Tested with **Paper 26.3, build 177**, **Java 25**, and optional **BlueMap 5.29**. Other versions have not been verified. BlueMap is optional.
+Tested with **Paper 26.3, builds 177 and 181**, **Java 25**, and optional **BlueMap 5.29**. Other versions have not been verified. BlueMap is optional.
 
 1. Download the jar from [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 2. Stop your server normally and back up your world.
@@ -67,9 +76,11 @@ Each generated file explains its options.
 | `snow.yml` | Snow surfaces, extra biome exclusions, ground cover and replenishment delay. |
 | `weather.yml` | Winter's introductory storm and seasonal rain/thunder frequency. |
 | `integrations.yml` | BlueMap updates. |
-| `visuals.yml` | Planned grass and leaf colors; not displayed yet. |
+| `visuals.yml` | Seasonal grass and leaf colors. |
 
-Snow covers exposed, supporting surfaces by default. A surface whitelist is optional. Climate exclusions match parts of biome names and can be changed in `config.yml`. Additional winter exclusions belong in `snow.yml`. Old player-priority and local accumulation settings are ignored.
+Snow covers exposed, supporting surfaces by default. A surface whitelist is optional. Climate exclusions match parts of biome names and can be changed in `config.yml`. Additional winter exclusions belong in `snow.yml`. Player-priority options do not change background migration order.
+
+Nearby loaded chunks accumulate real snow up to the shared winter transition percentage. The background pass still completes regions in order. `migration.player-radius-chunks` controls only the local storm radius; `transition.enabled` and its step settings in `snow.yml` control local accumulation.
 
 `ground-cover.enabled` controls temporary plant removal. Disabling it restores saved plants during the next terrain update. Plants return only where their original space and support remain suitable. Breaking winter snow, changing its support or placing a replacement can discard the saved plant at that spot. Unresolved conflicts are reported as deferred work and need attention before cleanup can finish.
 
@@ -84,6 +95,10 @@ True Seasons requests updates after a region's terrain changes finish and save. 
 **WORLD COMPLETE — MAP UPDATES PENDING** means terrain work has finished and BlueMap is catching up. Keep autosaving enabled and allow BlueMap to render. Frozen or stopped maps keep their updates pending.
 
 Status shows waiting reasons and True Seasons' region render count since startup. BlueMap's own updates are separate. New terrain or later snow changes can require another render.
+
+Season or palette changes also queue color updates for existing map regions. These use the same render limits and wait for terrain changes to finish and save. Unchanged restarts and reloads do not repeat the color pass. Seasonal recoloring is experimental: a completed render can still show vanilla grass and leaf colors.
+
+Edit `visuals.yml` to choose colors, then run `/ts reload`. Some plugin stacks may ask players to reconnect to load changed palettes.
 
 ## Permissions
 
@@ -104,8 +119,8 @@ Operators have administration access by default. All players can use `/ts info`.
 3. With BlueMap, also wait for **pending regions: 0**.
 4. Stop the server normally and remove the jar.
 
-Cleanup restores saved plants and removes the plugin's snow while preserving player replacements. Previously managed worlds must remain available until cleanup finishes, even if removed from the enabled list.
+Cleanup restores saved plants and removes the plugin's snow while preserving player replacements. Previously managed worlds must remain available until cleanup finishes, even if removed from the enabled list. Packet-based colors leave no saved biome or leaf changes to restore; cleanup also returns saved BlueMap tiles to their normal appearance.
 
 If the plugin remains installed after cleanup, seasons stay disabled until `/ts season sync` or `/ts season set ...`.
 
-Seasonal colors, matching BlueMap vegetation colors and Distant Horizons support are planned. See the [Changelog](docs/CHANGELOG.md) and [Roadmap](docs/ROADMAP.md).
+Distant Horizons support is planned. See the [Changelog](docs/CHANGELOG.md) and [Roadmap](docs/ROADMAP.md).

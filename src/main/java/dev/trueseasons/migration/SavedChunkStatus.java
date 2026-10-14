@@ -74,7 +74,7 @@ final class SavedChunkStatus {
                 case "trueseasons:season_version" -> { parsed.seasonMetadata=true; if(type==8)parsed.version=input.readUTF(); else skip(input,type,depth+1); }
                 case "trueseasons:winter_pending" -> { parsed.seasonMetadata=true; parsed.pending=true; if(type==8)parsed.pendingVersion=input.readUTF(); else skip(input,type,depth+1); }
                 case "trueseasons:winter_cursor" -> { parsed.seasonMetadata=true; parsed.pending=true; if(type==3)parsed.columns=input.readInt(); else skip(input,type,depth+1); }
-                case "trueseasons:snow_v1", "trueseasons:ground_cover_v1" -> { parsed.seasonMetadata=true; skip(input,type,depth+1); }
+                case "trueseasons:snow_v1", "trueseasons:ground_cover_v1", "trueseasons:winter_local" -> { parsed.seasonMetadata=true; skip(input,type,depth+1); }
                 case "trueseasons:bluemap_revision" -> { parsed.mapMarker=true; if(type==8)parsed.mapRevision=input.readUTF(); else skip(input,type,depth+1); }
                 default -> skip(input,type,depth+1);
             }

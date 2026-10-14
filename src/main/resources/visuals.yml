@@ -1,6 +1,7 @@
-# Shared resolver for future client presentation and integration adapters.
-# This first build exposes palettes but does not yet send tinted biome packets.
-# Vanilla saved biome IDs remain untouched.
+# Seasonal grass and biome-tinted leaves, in game and on BlueMap.
+# Spruce and other fixed-colour leaves keep their normal appearance.
+# Saved biome IDs and leaf blocks remain untouched.
+enabled: true
 families:
   evergreen: [taiga, grove]
   dry: [savanna, desert, badlands]

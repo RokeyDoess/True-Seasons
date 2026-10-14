@@ -71,6 +71,12 @@ public final class BlueMapRegionTests {
         check(ledger.needs(new Revision(first, "replenished-final"), "surface"), "Previously successful map renders changed final state again");
         check(gate.state(gate.snapshot(ledger, saved, deleted).get(region), ready, staging, 210_000, 30_000) == State.SAVING,
                 "Bounded coalescing cannot bypass the new token's save proof");
+        check(!gate.paletteReady(region, gate.snapshot(ledger, saved, deleted), ready, staging, 210_000, 30_000),
+                "Visual-only request cannot bypass physical final-save proof");
+        Region cleanRegion = new Region(world, 30, 40);
+        check(gate.paletteReady(cleanRegion, Map.of(), ready, staging, 210_000, 30_000), "Clean saved palette region needs no synthetic chunk metadata");
+        check(!gate.paletteReady(cleanRegion, Map.of(), (id, x, z) -> { gate.changed(cleanRegion, 210_001); return true; }, staging, 210_000, 30_000),
+                "First physical intent discovered by clean-region readiness blocks palette request");
         System.out.println("BlueMap region tests passed: " + assertions + " assertions");
     }
 }

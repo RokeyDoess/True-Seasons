@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import java.util.*;
 import java.util.function.IntPredicate;
+import java.util.function.IntUnaryOperator;
 
 /** Paper/Minecraft 26.3 palette format: fixed-size packed longs, with no length prefix. */
 public final class BiomeWireCodec {
@@ -14,6 +15,9 @@ public final class BiomeWireCodec {
         return chunk(source, originalCount, winter, id -> true);
     }
     public static ChunkData chunk(byte[] source, int originalCount, boolean winter, IntPredicate winterBiome) {
+        return chunk(source, originalCount, Math.multiplyExact(originalCount, 2), id -> id + (winter && winterBiome.test(id) ? originalCount : 0));
+    }
+    public static ChunkData chunk(byte[] source, int originalCount, int registrySize, IntUnaryOperator mapping) {
         ByteBuf in = Unpooled.wrappedBuffer(source), out = Unpooled.buffer(), biomes = Unpooled.buffer();
         try {
             while (in.isReadable()) {
@@ -23,7 +27,7 @@ public final class BiomeWireCodec {
                 skipPalette(in, 4096, 8);
                 out.writeBytes(in, start, in.readerIndex() - start);
                 int[] ids = readBiomes(in);
-                writeBiomes(out, ids, originalCount, winter, Math.multiplyExact(originalCount, 2), winterBiome);
+                writeMappedBiomes(out, ids, originalCount, registrySize, mapping);
                 writeBiomes(biomes, ids, originalCount, false, originalCount);
             }
             return new ChunkData(bytes(out), bytes(biomes));
@@ -34,9 +38,12 @@ public final class BiomeWireCodec {
         return biomes(source, originalCount, winter, id -> true);
     }
     public static byte[] biomes(byte[] source, int originalCount, boolean winter, IntPredicate winterBiome) {
+        return biomes(source, originalCount, Math.multiplyExact(originalCount, 2), id -> id + (winter && winterBiome.test(id) ? originalCount : 0));
+    }
+    public static byte[] biomes(byte[] source, int originalCount, int registrySize, IntUnaryOperator mapping) {
         ByteBuf in = Unpooled.wrappedBuffer(source), out = Unpooled.buffer();
         try {
-            while (in.isReadable()) writeBiomes(out, readBiomes(in), originalCount, winter, Math.multiplyExact(originalCount, 2), winterBiome);
+            while (in.isReadable()) writeMappedBiomes(out, readBiomes(in), originalCount, registrySize, mapping);
             return bytes(out);
         } finally { in.release(); out.release(); }
     }
@@ -66,11 +73,16 @@ public final class BiomeWireCodec {
         writeBiomes(out, ids, count, winter, registrySize, id -> true);
     }
     private static void writeBiomes(ByteBuf out, int[] ids, int count, boolean winter, int registrySize, IntPredicate winterBiome) {
+        writeMappedBiomes(out, ids, count, registrySize, id -> id + (winter && winterBiome.test(id) ? count : 0));
+    }
+    private static void writeMappedBiomes(ByteBuf out, int[] ids, int count, int registrySize, IntUnaryOperator mapping) {
+        if (registrySize < count) throw new IllegalArgumentException("Registry smaller than original palette");
         LinkedHashMap<Integer, Integer> palette = new LinkedHashMap<>();
         int[] values = new int[64];
         for (int i = 0; i < 64; i++) {
             if (ids[i] < 0 || ids[i] >= count) throw new IllegalArgumentException("Unknown original biome id " + ids[i]);
-            values[i] = ids[i] + (winter && winterBiome.test(ids[i]) ? count : 0);
+            values[i] = mapping.applyAsInt(ids[i]);
+            if (values[i] < 0 || values[i] >= registrySize) throw new IllegalArgumentException("Mapped biome outside client registry");
             palette.computeIfAbsent(values[i], key -> palette.size());
         }
         if (palette.size() == 1) { out.writeByte(0); writeVarInt(out, values[0]); return; }

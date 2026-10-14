@@ -7,6 +7,13 @@ surface-mode: all-exposed
 surface-materials: [GRASS_BLOCK, DIRT, COARSE_DIRT, PODZOL, MYCELIUM, ROOTED_DIRT, MOSS_BLOCK, STONE, ANDESITE, DIORITE, GRANITE, GRAVEL]
 # Biome names are matched against the Minecraft registry key.
 excluded-biome-fragments: []
+
+transition:
+  # Nearby loaded chunks accumulate snow up to the shared winter percentage.
+  # This does not change the background region-by-region migration order.
+  enabled: true
+  columns-per-step: 8
+  step-ticks: 5
 ground-cover:
   # Temporarily remove exposed grass, flowers and leaf litter during winter.
   # Exact plants are restored on leaving winter if the destination/support is unchanged.

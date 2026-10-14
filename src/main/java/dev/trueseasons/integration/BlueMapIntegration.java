@@ -3,6 +3,7 @@ package dev.trueseasons.integration;
 import com.flowpowered.math.vector.Vector2i;
 import de.bluecolored.bluemap.api.*;
 import dev.trueseasons.config.Settings;
+import dev.trueseasons.visual.SeasonalVisualState;
 import dev.trueseasons.integration.RenderLedger.*;
 import java.io.*;
 import java.nio.file.*;
@@ -24,11 +25,22 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     private record Proof(Revision revision, boolean purge, boolean absent, String error, boolean observationOnly, List<Revision> regionMembers, Path source) {}
     private record DeletionBatch(Region region, ArrayDeque<Revision> remaining, Path source) {}
     private record Purge(String token, boolean cleanup) {}
-    private record Flight(BlueMapRenderBridge.Ticket ticket, List<Revision> revisions) {}
+    private record Flight(BlueMapRenderBridge.Ticket ticket, List<Revision> revisions, String palette, List<Vector2i> regions) {}
     private final JavaPlugin plugin;
     private final Supplier<Settings> settings;
     private final Path file;
     private final DurableRenderJournal journal;
+    private final BlueMapVisualQueue visualQueue;
+    private Supplier<SeasonalVisualState> visualSource = () -> null;
+    private final Map<String, BlueMapSeasonalColors> colors = new HashMap<>();
+    private final Map<String, Object> colorMaps = new HashMap<>();
+    private final Map<String, Object> unsupportedColorMaps = new HashMap<>();
+    private final Set<String> unavailableColors = new HashSet<>();
+    private final Map<String, UUID> knownVisualMaps = new LinkedHashMap<>();
+    private boolean visualMapsConfirmed;
+    private String colorFailure;
+    private SeasonalVisualState lastVisualState;
+    private long lastColorRefresh;
     private final Set<ChunkKey> checkpointDirty = new LinkedHashSet<>(), durabilityRequired = new LinkedHashSet<>();
     private final ExecutorService persistence = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "TrueSeasons-render-journal"); thread.setDaemon(true); return thread;
@@ -68,6 +80,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         revisionKey = new NamespacedKey(plugin, "bluemap_revision"); seasonKey = new NamespacedKey(plugin, "season_version");
         file = plugin.getDataFolder().toPath().resolve("state/bluemap.yml");
         journal = new DurableRenderJournal(file.getParent());
+        visualQueue = new BlueMapVisualQueue(file.getParent().resolve("palettes"));
         Map<String, byte[]> recovered = journal.state();
         boolean journalAuthority = recovered.containsKey("__format") || journal.hasSnapshot();
         if (Files.exists(file) && !journalAuthority) {
@@ -167,18 +180,27 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         persist(finalDurability.due(Bukkit.getCurrentTick(), 128), true);
         Optional<BlueMapAPI> instance = BlueMapAPI.getInstance();
         if (instance.isPresent() && (mappedApi != instance.get() || now - lastWorldRefresh >= 1000)) {
-            lastWorldRefresh = now; mappedWorlds.clear(); mappedApi = instance.get();
+            lastWorldRefresh = now; mappedWorlds.clear();
             BlueMapAPI api = instance.get();
-            Set<UUID> ids = new LinkedHashSet<>(); ledger.entries().keySet().forEach(key -> ids.add(key.world()));
+            if (mappedApi != api) detachColors();
+            mappedApi = api;
+            Set<UUID> ids = new LinkedHashSet<>(); Bukkit.getWorlds().forEach(world -> ids.add(world.getUID()));
+            ledger.entries().keySet().forEach(key -> ids.add(key.world()));
             for (UUID id : ids) {
                 World world = Bukkit.getWorld(id);
                 if (world != null) api.getWorld(world).ifPresent(mapped -> mappedWorlds.put(id, mapped));
             }
+            knownVisualMaps.clear(); visualMapsConfirmed = true;
+            mappedWorlds.forEach((id, world) -> world.getMaps().forEach(map -> knownVisualMaps.put(map.getId(), id)));
             mappedWorlds.forEach((id, world) -> ledger.entries().keySet().stream().filter(k -> k.world().equals(id)).forEach(k -> {
                 Path folder = world.getSaveFolder().toAbsolutePath().normalize(); if (!folder.equals(folders.put(k, folder))) checkpointDirty.add(k);
             }));
         }
-        if (instance.isEmpty()) { mappedWorlds.clear(); mappedApi = null; }
+        if (instance.isEmpty()) { mappedWorlds.clear(); mappedApi = null; detachColors(); }
+        SeasonalVisualState colorState = settings.get().blueMap ? visualSource.get() : null;
+        if (instance.isPresent() && (!Objects.equals(colorState, lastVisualState) || now - lastColorRefresh >= 1000)) {
+            lastVisualState = colorState; lastColorRefresh = now; refreshColors(colorState);
+        }
         Map<UUID, BlueMapWorld> worlds = mappedWorlds;
         Set<ChunkKey> newlySaved = new LinkedHashSet<>();
         if (checking != null && checking.isDone()) {
@@ -258,6 +280,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                             lastFailure = null;
                             for (Revision revision : flight.getValue().revisions)
                                 if (ledger.acknowledge(revision, flight.getKey())) checkpointDirty.add(revision.chunk());
+                            if (!unavailableColors.contains(flight.getKey())) visualQueue.acknowledge(flight.getKey(), flight.getValue().palette, flight.getValue().regions);
                         } else lastFailure = flight.getKey() + ": " + flight.getValue().ticket.failure();
                         iterator.remove();
                     } else if (inspectScheduler && !bridge.scheduled(flight.getValue().ticket)) {
@@ -283,7 +306,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
             } else {
                 discardFlights(); manager = null; bridge = null;
             }
-        } catch (ReflectiveOperationException | RuntimeException failure) { lastFailure = "cannot schedule render: " + failure.getMessage(); }
+        } catch (ReflectiveOperationException | IOException | RuntimeException failure) { lastFailure = "cannot schedule render: " + failure.getMessage(); }
         // Lost receipts safely replay renders. Keep ordinary checkpoint work bounded per tick.
         persist(checkpointDirty.stream().limit(32).toList(), false);
         if (compacting != null && compacting.isCompletedExceptionally()) {
@@ -375,16 +398,27 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                     regionWaits.put(region, state);
                     if (state == RegionRenderGate.State.READY) regions.put(region, needed);
                 }
+                for (Vector2i coordinate : unavailableColors.contains(map.getId()) ? List.<Vector2i>of() : visualQueue.candidates(map.getId(), 128)) {
+                    if (regions.size() >= remaining) break;
+                    UUID worldId = worlds.entrySet().stream().filter(entry -> entry.getValue() == world).map(Map.Entry::getKey).findFirst().orElseThrow();
+                    Region region = new Region(worldId, coordinate.getX(), coordinate.getY());
+                    if (regions.containsKey(region)) continue;
+                    RegionRenderGate.Batch batch = batches.get(region);
+                    if (regionGate.paletteReady(region, batches, regionReadiness, deletionStaging, now, quietMillis)) {
+                        regions.put(region, batch == null ? List.of() : batch.revisions().stream().filter(revision -> ledger.needs(revision, map.getId())).toList());
+                    }
+                }
                 if (regions.isEmpty()) continue;
                 // Recheck the migration predicate immediately before entering the native scheduler.
                 // A callback can discover new terrain while candidates are being collected.
-                regions.keySet().removeIf(region -> regionGate.state(batches.get(region), regionReadiness, deletionStaging, now, quietMillis) != RegionRenderGate.State.READY);
+                regions.keySet().removeIf(region -> !regionGate.paletteReady(region, batches, regionReadiness, deletionStaging, now, quietMillis));
                 if (regions.isEmpty()) continue;
                 BlueMapRenderBridge.Ticket ticket = bridge.submit(map, regions.keySet().stream().map(r -> new Vector2i(r.x(), r.z())).toList());
                 if (ticket != null) {
                     regionRendersScheduled += regions.size();
-                    flights.put(map.getId(), new Flight(ticket, regions.values().stream().flatMap(Collection::stream).toList())); remaining -= regions.size(); submitted = true;
-                    regions.keySet().forEach(region -> regionGate.submitted(batches.get(region), now));
+                    flights.put(map.getId(), new Flight(ticket, regions.values().stream().flatMap(Collection::stream).toList(),
+                            visualQueue.receiptToken(map.getId()), regions.keySet().stream().map(region -> new Vector2i(region.x(), region.z())).toList())); remaining -= regions.size(); submitted = true;
+                    regions.keySet().forEach(region -> { if (batches.containsKey(region)) regionGate.submitted(batches.get(region), now); });
                 }
             }
             if (submitted) lastFlush = now;
@@ -442,6 +476,9 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         StringBuilder status = new StringBuilder(settings.get().blueMap ? (instance.isPresent() ? "connected" : "waiting for BlueMap") : "disabled; render requests retained");
         status.append("; ").append(flights.size()).append(" render batches; ").append(purges.size()).append(" metadata purges");
         status.append("; region renders scheduled this run: ").append(regionRendersScheduled);
+        status.append("; palette regions pending: ").append(visiblePalettePending());
+        if (colorFailure != null) status.append("; seasonal colours unavailable: ").append(colorFailure);
+        if (visualQueue.failure() != null) status.append("; ").append(visualQueue.failure());
         if (transitions > 0) status.append("; waiting for completed transitions: ").append(transitions).append(" chunks");
         if (awaitingSave > 0) status.append("; waiting for saved final revisions/recovery: ").append(awaitingSave).append(" chunks");
         if (sourceDeletions > 0) status.append("; removed-source map cleanup queued: ").append(sourceDeletions).append(" chunks");
@@ -507,7 +544,9 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     }
     @Override public int cleanupPending() {
         Set<ChunkKey> keys = new HashSet<>(); purges.forEach((key, purge) -> { if (purge.cleanup) keys.add(key); });
-        ledger.entries().forEach((key, entry) -> { if (entry.cleanup() && !entry.token().equals(readable.get(key))) keys.add(key); }); return keys.size();
+        ledger.entries().forEach((key, entry) -> { if (entry.cleanup() && !entry.token().equals(readable.get(key))) keys.add(key); });
+        return keys.size() + (settings.get().blueMap && (lastVisualState == null || lastVisualState.eligibleWorlds().isEmpty())
+                ? visualQueue.restorationPending(mappedMapIds()) : 0);
     }
     @Override public boolean isEnabled() { return settings.get().blueMap; }
     @Override public void setRegionReadiness(RegionReadiness readiness) { regionReadiness = Objects.requireNonNull(readiness); }
@@ -518,12 +557,74 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         ChunkKey key = new ChunkKey(world, x, z); RenderLedger.Entry entry = ledger.entries().get(key);
         return ledger.requiresMarkerRecovery(key, marker, entry != null && entry.token().equals(readable.get(key)), deleted.contains(key), restored.contains(key));
     }
-    @Override public int pending() { return ledger.regions(); }
+    @Override public void setVisuals(Supplier<SeasonalVisualState> visuals) { visualSource = Objects.requireNonNull(visuals); }
+    private void refreshColors(SeasonalVisualState state) {
+        Set<String> retained = new HashSet<>();
+        for (var world : mappedWorlds.entrySet()) for (BlueMapMap map : world.getValue().getMaps()) {
+            retained.add(map.getId());
+            try {
+                Object nativeMap = BlueMapRenderBridge.nativeMap(map);
+                if ((state == null || !state.active(world.getKey())) && visualQueue.target(map.getId()).equals("vanilla") && !colors.containsKey(map.getId())) {
+                    unavailableColors.remove(map.getId()); unsupportedColorMaps.remove(map.getId()); continue;
+                }
+                if (state != null && state.active(world.getKey())) {
+                    if (unsupportedColorMaps.get(map.getId()) == nativeMap) { unavailableColors.add(map.getId()); continue; }
+                    if (colorMaps.get(map.getId()) != nativeMap) {
+                        BlueMapSeasonalColors old = colors.remove(map.getId()); if (old != null) old.close();
+                        try { colors.put(map.getId(), new BlueMapSeasonalColors(nativeMap, world.getKey())); colorMaps.put(map.getId(), nativeMap); }
+                        catch (ReflectiveOperationException | RuntimeException unsupported) { unsupportedColorMaps.put(map.getId(), nativeMap); throw unsupported; }
+                    }
+                    BlueMapSeasonalColors tint = colors.get(map.getId()); tint.update(state);
+                    if (tint.failure() != null) {
+                        colorFailure = tint.failure(); tint.close(); colors.remove(map.getId()); colorMaps.remove(map.getId());
+                        unsupportedColorMaps.put(map.getId(), nativeMap); unavailableColors.add(map.getId()); continue;
+                    }
+                } else {
+                    BlueMapSeasonalColors old = colors.remove(map.getId()); if (old != null) old.close(); colorMaps.remove(map.getId());
+                }
+                unavailableColors.remove(map.getId()); unsupportedColorMaps.remove(map.getId());
+                String fingerprint = state == null ? "vanilla" : state.fingerprint(world.getKey());
+                Object nativeWorld = nativeMap.getClass().getMethod("getWorld").invoke(nativeMap);
+                var listRegions = nativeWorld.getClass().getMethod("listRegions");
+                visualQueue.target(map.getId(), fingerprint, () -> {
+                    @SuppressWarnings("unchecked") Collection<Vector2i> result = (Collection<Vector2i>) listRegions.invoke(nativeWorld); return result;
+                });
+            } catch (ReflectiveOperationException | RuntimeException failure) { colorFailure = failure.getMessage(); unavailableColors.add(map.getId()); }
+        }
+        for (String id : new ArrayList<>(colors.keySet())) if (!retained.contains(id)) { colors.remove(id).close(); colorMaps.remove(id); }
+        unavailableColors.retainAll(retained); unsupportedColorMaps.keySet().retainAll(retained);
+        if (unavailableColors.isEmpty()) colorFailure = null;
+        try { visualQueue.compact(); } catch (RuntimeException failure) { colorFailure = failure.getMessage(); }
+    }
+    private void detachColors() {
+        colors.values().forEach(BlueMapSeasonalColors::close); colors.clear(); colorMaps.clear(); unsupportedColorMaps.clear(); unavailableColors.clear();
+    }
+    private Set<String> mappedMapIds() {
+        if (mappedApi == null) {
+            // Until BlueMap confirms its configuration, recorded maps are unresolved.
+            // Once confirmed, retain only known active worlds during an API outage;
+            // a later configuration refresh can positively classify removed maps as dormant.
+            if (!visualMapsConfirmed) return visualQueue.recordedMaps();
+            Set<String> known = new LinkedHashSet<>();
+            knownVisualMaps.forEach((id, world) -> { if (Bukkit.getWorld(world) != null) known.add(id); });
+            return known;
+        }
+        Set<String> result = new LinkedHashSet<>();
+        mappedWorlds.values().forEach(world -> world.getMaps().forEach(map -> result.add(map.getId())));
+        return result;
+    }
+    private int visiblePalettePending() {
+        Set<String> maps = mappedMapIds();
+        return lastVisualState == null || lastVisualState.eligibleWorlds().isEmpty()
+                ? visualQueue.restorationPending(maps) : visualQueue.pending(maps);
+    }
+    @Override public int pending() { return ledger.regions() + visiblePalettePending(); }
     @Override public String status() { return detail; }
     @Override public void close() {
         closed = true; HandlerList.unregisterAll(this); if (bridge != null) flights.values().forEach(flight -> bridge.cancel(flight.ticket));
+        detachColors();
         reader.shutdownNow(); persist(new ArrayList<>(checkpointDirty), true);
-        try { journal.close(); } catch (IOException failure) { throw new UncheckedIOException("Cannot close BlueMap journal", failure); }
+        try { visualQueue.close(); journal.close(); } catch (IOException failure) { throw new UncheckedIOException("Cannot close BlueMap journal", failure); }
         finally { persistence.shutdown(); }
     }
 }

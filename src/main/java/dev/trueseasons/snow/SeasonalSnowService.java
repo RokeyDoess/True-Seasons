@@ -23,7 +23,7 @@ public final class SeasonalSnowService implements Listener {
     public record Result(int placed, int removed, int conflicts, boolean complete) {
         public boolean changed() { return placed > 0 || removed > 0; }
     }
-    private final NamespacedKey ownedKey, versionKey, pendingKey, cursorKey;
+    private final NamespacedKey ownedKey, versionKey, pendingKey, cursorKey, localKey;
     private final Supplier<Settings> settings;
     private final Supplier<Boolean> winter;
     private final WinterGroundCover groundCover;
@@ -33,11 +33,16 @@ public final class SeasonalSnowService implements Listener {
         this(plugin, settings, () -> false);
     }
     public SeasonalSnowService(Plugin plugin, Supplier<Settings> settings, Supplier<Boolean> winter) {
+        this(plugin, settings, winter, Bukkit::createBlockData);
+    }
+    SeasonalSnowService(Plugin plugin, Supplier<Settings> settings, Supplier<Boolean> winter,
+            java.util.function.Function<String, BlockData> parse) {
         this.settings = settings;
         this.winter = winter;
-        groundCover = new WinterGroundCover(plugin);
+        groundCover = new WinterGroundCover(plugin, parse);
         ownedKey = new NamespacedKey(plugin, "snow_v1"); versionKey = new NamespacedKey(plugin, "season_version");
         pendingKey = new NamespacedKey(plugin, "winter_pending"); cursorKey = new NamespacedKey(plugin, "winter_cursor");
+        localKey = new NamespacedKey(plugin, "winter_local");
     }
     public String version(Chunk chunk) {
         var pdc = chunk.getPersistentDataContainer();
@@ -60,7 +65,7 @@ public final class SeasonalSnowService implements Listener {
     }
     public boolean hasMetadata(Chunk chunk) {
         var pdc = chunk.getPersistentDataContainer();
-        return pdc.has(ownedKey) || pdc.has(versionKey) || pdc.has(pendingKey) || pdc.has(cursorKey) || groundCover.hasMetadata(chunk);
+        return pdc.has(ownedKey) || pdc.has(versionKey) || pdc.has(pendingKey) || pdc.has(cursorKey) || pdc.has(localKey) || groundCover.hasMetadata(chunk);
     }
     private SnowColumns read(Chunk chunk) throws IOException {
         var pdc = chunk.getPersistentDataContainer();
@@ -195,6 +200,107 @@ public final class SeasonalSnowService implements Listener {
         return replenishmentSnowData;
     }
 
+    /** Local storm edits are owned, but never certify a region's migration progress. */
+    Result accumulateLocalColumns(Chunk chunk, String version, int coverage, int[] columns,
+            Consumer<Chunk> beforeWrite, Consumer<Chunk> afterWrite, long deadline,
+            BooleanSupplier stillCurrent) throws IOException {
+        Settings config = settings.get();
+        if (!winter.get() || !config.snow) return new Result(0, 0, 0, false);
+        Integer height = chunk.getWorld().getGameRuleValue(GameRules.MAX_SNOW_ACCUMULATION_HEIGHT);
+        var policy = new ReplenishmentPolicy(config.snow, config.allExposed, config.surfaces,
+            config.excludedBiomes, height == null ? 1 : height,
+            biome -> config.climate.applies(Season.WINTER, biome));
+        return accumulateLocalColumns(chunk, version, coverage, columns, policy, config.groundCover,
+            defaultSnowData(), target -> {
+                BlockState state = target.getState(); state.setType(Material.SNOW);
+                return new BlockFormEvent(target, state).callEvent();
+            }, beforeWrite, afterWrite, deadline,
+            () -> winter.get() && settings.get().snow && stillCurrent.getAsBoolean());
+    }
+    private boolean localCompatible(Chunk chunk, String version) throws IOException {
+        var pdc = chunk.getPersistentDataContainer();
+        coveredColumns(chunk, version); // Validate transition types and cursor before edits.
+        if (pdc.has(localKey) && !pdc.has(localKey, PersistentDataType.STRING))
+            throw new IOException("Unexpected local winter metadata type");
+        String local = pdc.get(localKey, PersistentDataType.STRING);
+        String pending = pdc.get(pendingKey, PersistentDataType.STRING);
+        if (pending != null && !version.equals(pending)) return false;
+        if (local != null && !version.equals(local)) return false;
+        // Unassociated previous winter ownership requires the normal restoration pass.
+        return version.equals(local) || version.equals(pending)
+            || (!pdc.has(ownedKey) && !groundCover.hasMetadata(chunk));
+    }
+    private boolean localAllowed(Chunk chunk, String version, BooleanSupplier current) throws IOException {
+        return chunk.isLoaded() && chunk.getWorld().hasStorm() && !isComplete(chunk, version)
+            && current.getAsBoolean() && localCompatible(chunk, version);
+    }
+    private static final class LocalAborted extends RuntimeException {}
+    /** Isolated terrain overload also exercises local ownership and render-intent ordering. */
+    Result accumulateLocalColumns(Chunk chunk, String version, int coverage, int[] columns,
+            ReplenishmentPolicy policy, boolean hidePlants, BlockData snowData, Predicate<Block> permit,
+            Consumer<Chunk> beforeWrite, Consumer<Chunk> afterWrite, long deadline,
+            BooleanSupplier stillCurrent) throws IOException {
+        Objects.requireNonNull(version); Objects.requireNonNull(columns);
+        if (coverage < 0 || coverage > 256 || columns.length > 256) throw new IllegalArgumentException("Invalid local snow coverage/batch");
+        for (int column : columns) if (column < 0 || column > 255) throw new IllegalArgumentException("Invalid snow column");
+        if (!policy.enabled || policy.accumulationHeight <= 0 || coverage == 0
+                || !localAllowed(chunk, version, stillCurrent)) return new Result(0, 0, 0, false);
+        SnowColumns owned = read(chunk);
+        WinterGroundCover.State plants = groundCover.read(chunk);
+        World world = chunk.getWorld(); List<WinterGroundCover.Surface> surfaces = new ArrayList<>();
+        BitSet sampled = new BitSet(256);
+        for (int column : columns) {
+            if (System.nanoTime() >= deadline) break;
+            if (sampled.get(column) || !LocalWinterSnowService.withinCoverage(column, chunk.getX(), chunk.getZ(), version, coverage)) continue;
+            sampled.set(column);
+            Block ground = world.getHighestBlockAt(chunk.getX() * 16 + (column & 15),
+                chunk.getZ() * 16 + (column >> 4), HeightMap.WORLD_SURFACE);
+            if (ground.getLightFromSky() != 15 || ground.getLightFromBlocks() >= 10) continue;
+            if (!policy.excludedBiomes.isEmpty()
+                    && policy.excludedBiomes.stream().anyMatch(ground.getBiome().getKey().getKey()::contains)) continue;
+            if (policy.winterBiomes != null && !policy.winterBiomes.test(ground.getBiome().getKey().toString())) continue;
+            Integer old = owned.get(column);
+            if (old != null && chunk.getBlock(column & 15, old, column >> 4).getType() == Material.SNOW) continue;
+            surfaces.add(new WinterGroundCover.Surface(column, ground));
+        }
+        boolean[] intentCreated = {false};
+        Runnable intent = () -> {
+            if (intentCreated[0]) return;
+            try {
+                if (!localAllowed(chunk, version, stillCurrent)) throw new LocalAborted();
+                beforeWrite.accept(chunk); intentCreated[0] = true;
+                if (!localAllowed(chunk, version, stillCurrent)) throw new LocalAborted();
+                chunk.getPersistentDataContainer().set(localKey, PersistentDataType.STRING, version);
+            } catch (IOException failure) { throw new UncheckedIOException(failure); }
+        };
+        int placed = 0, removed = 0;
+        try {
+            if (hidePlants && System.nanoTime() < deadline)
+                removed = groundCover.hideBatch(plants, surfaces, intent);
+            List<Refill> placements = new ArrayList<>();
+            for (WinterGroundCover.Surface surface : surfaces) {
+                if (System.nanoTime() >= deadline || !localAllowed(chunk, version, stillCurrent)) break;
+                Block ground = surface.top();
+                if (ground.getType() == Material.AIR || ground.getType() == Material.CAVE_AIR || ground.getType() == Material.VOID_AIR)
+                    ground = world.getHighestBlockAt(ground.getX(), ground.getZ(), HeightMap.WORLD_SURFACE);
+                if (ground.getType() == Material.SNOW || ground.getY() + 1 >= world.getMaxHeight()
+                        || (!policy.allExposed && !policy.surfaces.contains(ground.getType()))) continue;
+                Block target = ground.getRelative(BlockFace.UP);
+                if (canReplenish(target, snowData) && permit.test(target)) placements.add(new Refill(surface.column(), target));
+            }
+            placements.removeIf(refill -> !canReplenish(refill.target, snowData));
+            if (!placements.isEmpty() && localAllowed(chunk, version, stillCurrent)) {
+                intent.run();
+                for (Refill refill : placements) owned.put(refill.column, refill.target.getY());
+                write(chunk, owned);
+                for (Refill refill : placements) { refill.target.setType(Material.SNOW, false); placed++; }
+            }
+        } catch (LocalAborted ignored) { /* Reentrant events may pause or change the season. */ }
+        catch (UncheckedIOException failure) { throw failure.getCause(); }
+        finally { if (intentCreated[0]) afterWrite.accept(chunk); }
+        return new Result(placed, removed, 0, false);
+    }
+
     public Result apply(Chunk chunk, Season season, String version, boolean cleanup) throws IOException {
         return applyStep(chunk, season, version, cleanup, 256);
     }
@@ -217,7 +323,9 @@ public final class SeasonalSnowService implements Listener {
         int cursor = pdc.getOrDefault(cursorKey, PersistentDataType.INTEGER, 0);
         if (cursor < 0 || cursor > 256 || (cursor != 0 && pending == null)) throw new IOException("Invalid winter transition cursor");
         boolean winter = !cleanup && season == Season.WINTER && settings.get().snow;
-        boolean resume = winter && version.equals(pending);
+        if (pdc.has(localKey) && !pdc.has(localKey, PersistentDataType.STRING))
+            throw new IOException("Unexpected local winter metadata type");
+        boolean resume = winter && (version.equals(pending) || version.equals(pdc.get(localKey, PersistentDataType.STRING)));
         if (winter && isComplete(chunk, version)) return new Result(0, 0, 0, true);
         int placed = 0, removed = 0, conflicts = 0;
         boolean[] physicalIntent = {false};
@@ -242,7 +350,7 @@ public final class SeasonalSnowService implements Listener {
         if (conflicts > 0) { write(chunk, owned); return new Result(placed, removed, conflicts, false); }
         boolean complete = true;
         if (winter) {
-            if (!resume) cursor = 0;
+            if (!version.equals(pending)) cursor = 0; // Local snowfall never advances the region's cursor.
             List<Block> placements = new ArrayList<>();
             List<WinterGroundCover.Surface> surfaces = new ArrayList<>();
             int end = Math.min(256, cursor + columns);
@@ -284,7 +392,7 @@ public final class SeasonalSnowService implements Listener {
         }
         write(chunk, owned);
         if (complete) {
-            pdc.remove(pendingKey); pdc.remove(cursorKey);
+            pdc.remove(pendingKey); pdc.remove(cursorKey); pdc.remove(localKey);
             if (cleanup) pdc.remove(versionKey);
             else pdc.set(versionKey, PersistentDataType.STRING, version);
         }

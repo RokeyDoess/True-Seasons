@@ -16,11 +16,11 @@ function Disable-CloneJar([System.IO.FileInfo]$Jar) {
 $taskOldProbe = Join-Path $taskRun 'plugins/TrueSeasonsVerification.jar'
 if (Test-Path -LiteralPath $taskOldProbe) { Disable-CloneJar (Get-Item -LiteralPath $taskOldProbe) }
 foreach ($taskOld in Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -Filter 'TrueSeasons-*.jar') {
-    if ($taskOld.Name -ne 'TrueSeasons-0.1.9.jar') { Disable-CloneJar $taskOld }
+    if ($taskOld.Name -ne 'TrueSeasons-0.1.10.jar') { Disable-CloneJar $taskOld }
 }
 $taskOtherProbes = @(Get-ChildItem -LiteralPath (Join-Path $taskRun 'plugins') -Filter 'TrueSeasons*Verification.jar' | Where-Object Name -ne 'TrueSeasonsMetadataOnlyVerification.jar')
 if ($taskOtherProbes.Count -gt 0) { throw 'An unrelated verification probe is active; disable it before this focused run' }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.9.jar') -Destination (Join-Path $taskRun 'plugins/TrueSeasons-0.1.9.jar') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.10.jar') -Destination (Join-Path $taskRun 'plugins/TrueSeasons-0.1.10.jar') -Force
 $taskProbe = Join-Path $PSScriptRoot 'build/metadata-only-probe'
 New-Item -ItemType Directory -Path $taskProbe -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbe 'plugin.yml'), @'

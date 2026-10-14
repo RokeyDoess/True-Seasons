@@ -36,20 +36,22 @@ Write-JavaArgs $taskArgs (@('--release','25','-encoding','UTF-8','-classpath',"$
 if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed' }
 & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskClasspath" 'dev.trueseasons.CoreTests'
 if ($LASTEXITCODE -ne 0) { throw 'Core tests failed' }
-foreach ($taskTestMain in @('dev.trueseasons.migration.MigrationBookkeepingTests','dev.trueseasons.migration.RegionReadinessTests','dev.trueseasons.migration.RegionOrderTests','dev.trueseasons.migration.IndexHydrationBudgetTests','dev.trueseasons.climate.SeasonClimateTests','dev.trueseasons.snow.WinterGroundCoverTests','dev.trueseasons.snow.LocalWinterSnowTests','dev.trueseasons.migration.WinterCoveragePolicyTests','dev.trueseasons.command.CommandPresentationTests','dev.trueseasons.snow.SnowReplenishmentTests','dev.trueseasons.snow.SnowBreakCooldownTests','dev.trueseasons.migration.GeneratedChunkSnapshotTests','dev.trueseasons.SnowCompletionTests','dev.trueseasons.snow.SnowMigrationIntentTests','dev.trueseasons.integration.BlueMapReliabilityTests','dev.trueseasons.integration.BlueMapRegionTests','dev.trueseasons.integration.BlueMapRecoveryTests','dev.trueseasons.integration.BlueMapReceiptTests','dev.trueseasons.integration.BlueMapJournalTests','dev.trueseasons.integration.BlueMapSeasonalColorsTests','dev.trueseasons.integration.BlueMapVisualQueueTests')) {
+foreach ($taskTestMain in @('dev.trueseasons.migration.MigrationBookkeepingTests','dev.trueseasons.migration.RegionReadinessTests','dev.trueseasons.migration.RegionOrderTests','dev.trueseasons.migration.IndexHydrationBudgetTests','dev.trueseasons.climate.SeasonClimateTests','dev.trueseasons.snow.WinterGroundCoverTests','dev.trueseasons.snow.LocalWinterSnowTests','dev.trueseasons.migration.WinterCoveragePolicyTests','dev.trueseasons.command.CommandPresentationTests','dev.trueseasons.snow.SnowReplenishmentTests','dev.trueseasons.snow.SnowBreakCooldownTests','dev.trueseasons.migration.GeneratedChunkSnapshotTests','dev.trueseasons.SnowCompletionTests','dev.trueseasons.snow.SnowMigrationIntentTests','dev.trueseasons.integration.BlueMapReliabilityTests','dev.trueseasons.integration.BlueMapRegionTests','dev.trueseasons.integration.BlueMapRecoveryTests','dev.trueseasons.integration.BlueMapReceiptTests','dev.trueseasons.integration.BlueMapJournalTests','dev.trueseasons.integration.BlueMapSeasonalColorsTests','dev.trueseasons.integration.BlueMapVisualQueueTests','dev.trueseasons.visual.AutumnTreeColorsTests')) {
     & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskClasspath" $taskTestMain
     if ($LASTEXITCODE -ne 0) { throw "$taskTestMain failed" }
 }
 $taskNms = Join-Path $taskServer 'versions/26.3/paper-26.3.jar'
 & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.NativeSnowPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Native snow packet tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.9.jar'
+& (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.AutumnLeafPacketTests'
+if ($LASTEXITCODE -ne 0) { throw 'Autumn leaf packet tests failed' }
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.1.10.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
 if ($Install) {
     foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'TrueSeasons-*.jar') {
-        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.9.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+        if ($taskOldJar.Name -ne 'TrueSeasons-0.1.10.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
     }
-    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.9.jar') -Force
+    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.1.10.jar') -Force
 }
 Write-Output "Built and verified: $taskJar"

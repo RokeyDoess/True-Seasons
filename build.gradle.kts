@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.1.9"
+version = "0.1.10"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -11,6 +11,8 @@ dependencies {
     compileOnly("de.bluecolored:bluemap-api:2.7.7")
     compileOnly("io.netty:netty-transport:4.2.16.Final")
     compileOnly("io.netty:netty-buffer:4.2.16.Final")
+    compileOnly("it.unimi.dsi:fastutil:8.5.18")
+    testRuntimeOnly("it.unimi.dsi:fastutil:8.5.18")
     testRuntimeOnly("io.papermc.paper:paper-api:26.3.build.177-stable")
     testImplementation("de.bluecolored:bluemap-core:5.29")
 }
@@ -43,7 +45,8 @@ listOf(
     "blueMapRecoveryTest" to "dev.trueseasons.integration.BlueMapRecoveryTests",
     "blueMapJournalTest" to "dev.trueseasons.integration.BlueMapJournalTests",
     "blueMapSeasonalColorsTest" to "dev.trueseasons.integration.BlueMapSeasonalColorsTests",
-    "blueMapVisualQueueTest" to "dev.trueseasons.integration.BlueMapVisualQueueTests"
+    "blueMapVisualQueueTest" to "dev.trueseasons.integration.BlueMapVisualQueueTests",
+    "autumnTreeColorsTest" to "dev.trueseasons.visual.AutumnTreeColorsTests"
 ).forEach { (taskName, entryPoint) ->
     tasks.register<JavaExec>(taskName) {
         dependsOn(tasks.testClasses)

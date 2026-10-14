@@ -2,6 +2,8 @@ package dev.trueseasons.integration;
 
 import dev.trueseasons.api.SeasonVisualProfile;
 import dev.trueseasons.visual.SeasonalVisualState;
+import dev.trueseasons.visual.AutumnTreeColors;
+import dev.trueseasons.api.Season;
 import java.lang.invoke.*;
 import java.lang.reflect.*;
 import java.util.*;
@@ -22,7 +24,14 @@ final class BlueMapSeasonalColors implements AutoCloseable {
     private final Object defaultRenderer;
     private final Method getRenderer;
     private final MethodHandle blockId, accessBlockState, keyValue, keyNamespace, blockBiome, biomeKey, colorSet;
-    private final Map<Object, Object[]> originals = Collections.synchronizedMap(new IdentityHashMap<>());
+    private final Map<Object, Object[]> originals = Collections.synchronizedMap(new WeakHashMap<>());
+    private final Class<?> renderPassClass, worldClass, chunkClass;
+    private final Method chunkAt, chunkState, chunkGenerated, stateProperties;
+    private final MethodHandle chunkAtHandle, chunkStateHandle, chunkGeneratedHandle;
+    private final Constructor<?> stateConstructor;
+    private final Class<?> paletteChunkClass;
+    private final Field chunkSectionsField, sectionPaletteField;
+    private final Map<AutumnTreeColors.Appearance,Object> leafKeys = new EnumMap<>(AutumnTreeColors.Appearance.class);
     private record Palette(SeasonalVisualState state, Map<String, Optional<SeasonVisualProfile>> cache) {}
     private volatile Palette palette = new Palette(null, new ConcurrentHashMap<>());
     private volatile boolean closed;
@@ -46,6 +55,28 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         Class<?> access = Class.forName("de.bluecolored.bluemap.core.world.block.BlockAccess", false, loader);
         Class<?> block = Class.forName("de.bluecolored.bluemap.core.world.BlockState", false, loader);
         Class<?> key = Class.forName("de.bluecolored.bluemap.core.util.Key", false, loader);
+        renderPassClass = Class.forName("de.bluecolored.bluemap.core.map.hires.RenderPass", false, loader);
+        worldClass = Class.forName("de.bluecolored.bluemap.core.world.World", false, loader);
+        chunkClass = Class.forName("de.bluecolored.bluemap.core.world.Chunk", false, loader);
+        chunkAt = worldClass.getMethod("getChunkAtBlock", int.class, int.class);
+        chunkState = chunkClass.getMethod("getBlockState", int.class, int.class, int.class);
+        chunkGenerated = chunkClass.getMethod("isGenerated");
+        chunkAtHandle = MethodHandles.publicLookup().unreflect(chunkAt).asType(MethodType.methodType(Object.class,Object.class,int.class,int.class));
+        chunkStateHandle = MethodHandles.publicLookup().unreflect(chunkState).asType(MethodType.methodType(Object.class,Object.class,int.class,int.class,int.class));
+        chunkGeneratedHandle = MethodHandles.publicLookup().unreflect(chunkGenerated).asType(MethodType.methodType(boolean.class,Object.class));
+        stateProperties = block.getMethod("getProperties"); stateConstructor = block.getConstructor(key, Map.class);
+        Class<?> checkedChunk = null; Field checkedSections = null, checkedPalette = null;
+        try {
+            checkedChunk = Class.forName("de.bluecolored.bluemap.core.world.mca.chunk.Chunk_1_18",false,loader);
+            checkedSections = field(checkedChunk,"sections");
+            checkedPalette = field(checkedSections.getType().getComponentType(),"blockPalette");
+        } catch (ReflectiveOperationException | RuntimeException unavailable) {
+            // Optional optimization only. An unfamiliar reader still uses normal block access.
+            checkedChunk = null; checkedSections = null; checkedPalette = null;
+        }
+        paletteChunkClass = checkedChunk; chunkSectionsField = checkedSections; sectionPaletteField = checkedPalette;
+        for (var appearance : AutumnTreeColors.Appearance.values()) if (appearance.blockKey() != null)
+            leafKeys.put(appearance, key.getConstructor(String.class).newInstance(appearance.blockKey()));
         Class<?> biome = Class.forName("de.bluecolored.bluemap.core.world.biome.Biome", false, loader);
         blockId = handle(block.getMethod("getId")); accessBlockState = handle(access.getMethod("getBlockState"));
         keyValue = handle(key.getMethod("getValue")); keyNamespace = handle(key.getMethod("getNamespace"));
@@ -56,10 +87,16 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         // Each worker owns its calculators. Initialize and alter them only on that worker.
         replacement = new ThreadLocal<>() {
             @Override protected Object initialValue() {
-                Object passes = original.get();
-                if (!closed) try { for (Object pass : (Collection<?>) passes) if (blockPassClass.isInstance(pass)) install(pass); }
+                Collection<?> passes = (Collection<?>) original.get();
+                List<Object> wrapped = new ArrayList<>();
+                try { for (Object pass : passes) {
+                    if (blockPassClass.isInstance(pass)) {
+                        if (!closed) install(pass);
+                        wrapped.add(Proxy.newProxyInstance(loader, new Class<?>[]{renderPassClass}, new Pass(pass)));
+                    } else wrapped.add(pass);
+                } }
                 catch (ReflectiveOperationException | RuntimeException unsupported) { failure = unsupported.getMessage(); }
-                return passes;
+                return wrapped.size() == passes.size() ? List.copyOf(wrapped) : passes;
             }
         };
         // Validate the actual installed renderer before installing on other workers.
@@ -79,6 +116,113 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         if (!Objects.equals(palette.state, next)) palette = new Palette(next, new ConcurrentHashMap<>());
     }
     String failure() { return failure; }
+    /** Native renderer caches expire after one idle minute. Check each tile, not just each worker. */
+    private final class Pass implements InvocationHandler {
+        private final Object pass;
+        Pass(Object pass) { this.pass = pass; }
+        @Override public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            if (method.getName().equals("render") && !closed) {
+                try { install(pass); }
+                catch (ReflectiveOperationException | RuntimeException unsupported) {
+                    failure = unsupported.getMessage(); throw unsupported;
+                }
+                SeasonalVisualState captured = palette.state;
+                if (captured != null && captured.active(world) && captured.season() == Season.AUTUMN && captured.resolver().autumnTrees()) {
+                    args = args.clone(); args[0] = new AutumnWorld(args[0], captured.seed(world)).proxy;
+                }
+            }
+            try { return method.invoke(pass, args); }
+            catch (InvocationTargetException thrown) { throw thrown.getCause(); }
+        }
+    }
+    static Object nativePass(Object pass) {
+        if (Proxy.isProxyClass(pass.getClass()) && Proxy.getInvocationHandler(pass) instanceof BlueMapSeasonalColors.Pass wrapper) return wrapper.pass;
+        return pass;
+    }
+    /** Tile-scoped facade reads only BlueMap's saved-world reader. No Bukkit calls or world writes. */
+    private final class AutumnWorld {
+        final Object source, proxy;
+        final Map<Long,Object> originals = new LinkedHashMap<>();
+        final Map<Object,Object> chunks = new IdentityHashMap<>();
+        final Map<Object,Object[]> states = new IdentityHashMap<>();
+        final Map<Object,AutumnTreeColors.Kind> kinds = new IdentityHashMap<>();
+        long lastCoordinate = Long.MIN_VALUE;
+        Object lastChunk;
+        final AutumnTreeColors.Session trees;
+        AutumnWorld(Object source, long seed) {
+            this.source = source;
+            trees = new AutumnTreeColors.Session(seed, (x,y,z) -> {
+                try {
+                    Object chunk = originalChunk(x,z);
+                    if (!(boolean) chunkGeneratedHandle.invokeExact(chunk)) return AutumnTreeColors.Kind.UNKNOWN;
+                    Object state = (Object) chunkStateHandle.invokeExact(chunk,x,y,z);
+                    return kind(state);
+                } catch (Throwable failure) { throw new IllegalStateException("Cannot sample saved autumn tree", failure); }
+            });
+            proxy = Proxy.newProxyInstance(worldClass.getClassLoader(), new Class<?>[]{worldClass}, (object,method,args) -> {
+                if (method.getName().equals("getChunkAtBlock")) return wrapChunk(originalChunk((int)args[0],(int)args[1]));
+                if (method.getName().equals("getChunk")) return wrapChunk(originalChunk((int)args[0]<<4,(int)args[1]<<4));
+                Object result = call(method,source,args);
+                return chunkClass.isInstance(result) ? wrapChunk(result) : result;
+            });
+        }
+        Object originalChunk(int x,int z) throws Throwable {
+            long coordinate = ((long)(x >> 4) << 32) ^ ((z >> 4) & 0xffffffffL);
+            // Face culling and ambient occlusion revisit the same chunk for most voxels.
+            // Avoid both native Caffeine access and boxed coordinate allocation there.
+            if (coordinate == lastCoordinate && lastChunk != null) return lastChunk;
+            Object chunk = originals.get(coordinate);
+            if (chunk == null) {
+                chunk = (Object) chunkAtHandle.invokeExact(source,x,z);
+                if (originals.size() >= 256) originals.remove(originals.keySet().iterator().next());
+                originals.put(coordinate,chunk);
+            }
+            lastCoordinate = coordinate; lastChunk = chunk; return chunk;
+        }
+        AutumnTreeColors.Kind kind(Object state) throws Throwable {
+            AutumnTreeColors.Kind kind = kinds.get(state);
+            if (kind != null) return kind;
+            kind = AutumnTreeColors.kind(((Object)blockId.invokeExact(state)).toString());
+            if (kinds.size() >= 4096) kinds.clear();
+            kinds.put(state,kind); return kind;
+        }
+        Object wrapChunk(Object chunk) throws Throwable {
+            Object wrapped = chunks.get(chunk);
+            if (wrapped != null) return wrapped;
+            if (chunks.size() >= 256) chunks.clear();
+            if (!mayHaveAutumnLeaves(chunk)) { chunks.put(chunk,chunk); return chunk; }
+            wrapped = Proxy.newProxyInstance(chunkClass.getClassLoader(),new Class<?>[]{chunkClass},(object,method,args) -> {
+                if (!method.getName().equals("getBlockState")) return call(method,chunk,args);
+                Object result = (Object) chunkStateHandle.invokeExact(chunk,(int)args[0],(int)args[1],(int)args[2]);
+                if (!kind(result).leaves()) return result;
+                var appearance = trees.appearanceAt((int)args[0],(int)args[1],(int)args[2]);
+                if (appearance == AutumnTreeColors.Appearance.ORIGINAL) return result;
+                Object[] painted = states.get(result);
+                if (painted == null) {
+                    if (states.size() >= 512) states.clear();
+                    painted = new Object[AutumnTreeColors.Appearance.values().length]; states.put(result,painted);
+                }
+                if (painted[appearance.ordinal()] == null) painted[appearance.ordinal()] = stateConstructor.newInstance(leafKeys.get(appearance),stateProperties.invoke(result));
+                return painted[appearance.ordinal()];
+            });
+            chunks.put(chunk,wrapped); return wrapped;
+        }
+        boolean mayHaveAutumnLeaves(Object chunk) throws Throwable {
+            if (paletteChunkClass == null || chunk.getClass() != paletteChunkClass) return true;
+            try {
+                for (Object section : (Object[])chunkSectionsField.get(chunk)) if (section != null)
+                    for (Object state : (Object[])sectionPaletteField.get(section)) if (kind(state).leaves()) return true;
+                return false;
+            } catch (ReflectiveOperationException | RuntimeException unfamiliar) {
+                // Fail open to ordinary read-only rendering if this optional internal layout changes.
+                return true;
+            }
+        }
+    }
+    private static Object call(Method method,Object target,Object[] args) throws Throwable {
+        try { return method.invoke(target,args); }
+        catch (InvocationTargetException thrown) { throw thrown.getCause(); }
+    }
     private void install(Object pass) throws ReflectiveOperationException {
         Object renderer = getRenderer.invoke(renderersField.get(blockRendererField.get(pass)), defaultRenderer);
         synchronized (originals) {

@@ -11,6 +11,7 @@ public final class SeasonVisualResolver {
     private final Map<String, Map<Season, SeasonVisualProfile>> palettes = new HashMap<>();
     private final SeasonClimatePolicy climate;
     private final boolean enabled;
+    private final boolean autumnTrees;
     private final String fingerprint;
     public SeasonVisualResolver(YamlConfiguration config) {
         this(config, SeasonClimatePolicy.ALL);
@@ -18,6 +19,7 @@ public final class SeasonVisualResolver {
     public SeasonVisualResolver(YamlConfiguration config, SeasonClimatePolicy climate) {
         this.climate = Objects.requireNonNull(climate);
         enabled = config.getBoolean("enabled", true);
+        autumnTrees = config.getBoolean("autumn-trees.enabled", true);
         var section = config.getConfigurationSection("families");
         if (section != null) for (String family : section.getKeys(false)) families.put(family, section.getStringList(family));
         Set<String> names = new LinkedHashSet<>(families.keySet()); names.add("temperate");
@@ -44,12 +46,13 @@ public final class SeasonVisualResolver {
         return palettes.get(family).get(climate.paletteSeason(season, biomeKey));
     }
     public boolean enabled() { return enabled; }
+    public boolean autumnTrees() { return autumnTrees; }
     public boolean applies(Season season, String biomeKey) { return enabled && climate.applies(season, biomeKey); }
     public String fingerprint() {
         return fingerprint;
     }
     private String computeFingerprint() {
-        String value = enabled + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature();
+        String value = "visual2\n" + enabled + "/" + autumnTrees + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature();
         try {
             return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
                 .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));

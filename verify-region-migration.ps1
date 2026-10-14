@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $taskSourceCandidate = Join-Path $PSScriptRoot 'run/verification'
 if (-not (Test-Path -LiteralPath $taskSourceCandidate)) { $taskSourceCandidate = Join-Path $PSScriptRoot '../test server' }
 $taskSource = (Resolve-Path -LiteralPath $taskSourceCandidate).Path
-$taskRun = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run/region-verification-0.1.9'))
+$taskRun = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run/region-verification-0.1.10'))
 $taskRunRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run')) + [System.IO.Path]::DirectorySeparatorChar
 if (-not $taskRun.StartsWith($taskRunRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid verification path' }
 if ((Test-Path -LiteralPath $taskRun) -and -not $Resume) { throw 'Preserve previous region verification before running again' }
@@ -28,7 +28,7 @@ foreach ($taskJar in Get-ChildItem -LiteralPath $taskPlugins -Filter 'TrueSeason
     Rename-Item -LiteralPath $taskJar.FullName -NewName ($taskJar.Name + '.disabled.' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/plugins/bluemap-5.29-paper.jar') -Destination $taskPlugins -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.9.jar') -Destination $taskPlugins
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.10.jar') -Destination $taskPlugins
 $taskProbeBuild = Join-Path $PSScriptRoot 'build/region-probe'
 New-Item -ItemType Directory -Path $taskProbeBuild -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbeBuild 'plugin.yml'), @'

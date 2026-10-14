@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.10
+
+- Give autumn trees stable yellow, orange or red leaf appearances without a resource pack or saved leaf changes. Include birch, make cherry red only and leave spruce unchanged.
+- Restore original leaf appearances when autumn ends, while preserving player edits and ordinary leaf properties.
+- Fix seasonal grass and leaf colors reverting to vanilla on BlueMap between renders. Match autumn tree appearances on the map.
+- Keep autumn coloring within existing terrain without loading extra chunks.
+
 ## 0.1.9
 
 - Add seasonal grass and leaf colors, including autumn tones for biome-tinted leaves. Spruce and other leaves with fixed colors keep their normal appearance.

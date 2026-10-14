@@ -28,6 +28,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private final Function<World, Season> colors;
     private final Supplier<SeasonVisualResolver> visuals;
     private final PaperBiomePackets packets;
+    private final PaperLeafPackets leafPackets;
+    private volatile Map<String, PaperLeafPackets.Context> leafWorlds = Map.of();
     private final Map<UUID, Viewer> viewers = new ConcurrentHashMap<>();
     private final Set<UUID> warned = new HashSet<>();
     private volatile boolean closed;
@@ -45,6 +47,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         this.climate = Objects.requireNonNull(climate);
         this.colors = Objects.requireNonNull(colors); this.visuals = Objects.requireNonNull(visuals);
         packets = new PaperBiomePackets();
+        leafPackets = visuals.get() == null ? null : new PaperLeafPackets();
+        refreshLeafWorlds();
         Bukkit.getPluginManager().registerEvents(this, plugin);
         for (Player player : Bukkit.getOnlinePlayers()) warnReconnect(player);
     }
@@ -61,7 +65,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 if (closed) { viewers.remove(id); channel.eventLoop().execute(() -> existing.retire()); }
                 return;
             }
-            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals);
+            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals, leafPackets, () -> leafWorlds);
             channel.pipeline().addBefore("packet_handler", HANDLER, handler);
             UUID id = event.getConnection().getProfile().getId();
             viewers.put(id, new Viewer(channel, handler));
@@ -84,9 +88,27 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
 
     public void tick() {
         if (closed) return;
+        refreshLeafWorlds();
         viewers.entrySet().removeIf(entry -> !entry.getValue().channel.isActive());
         for (Player player : Bukkit.getOnlinePlayers()) update(player);
     }
+    private PaperLeafPackets.Context leafContext(World world) {
+        SeasonVisualResolver resolver = visuals.get();
+        Season season = colors.apply(world);
+        return new PaperLeafPackets.Context(world.getSeed(), world.getMinHeight(), world.getMaxHeight(),
+            resolver != null && resolver.enabled() && resolver.autumnTrees() && season == Season.AUTUMN);
+    }
+    private void refreshLeafWorlds() {
+        if (leafPackets == null) return;
+        Map<String, PaperLeafPackets.Context> next = new HashMap<>();
+        for (World world : Bukkit.getWorlds()) {
+            PaperLeafPackets.Context info = leafContext(world);
+            if (info != null) next.put(world.getKey().asString(), info);
+        }
+        if (!next.equals(leafWorlds)) leafWorlds = Map.copyOf(next);
+    }
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void loaded(org.bukkit.event.world.WorldLoadEvent event) { refreshLeafWorlds(); }
     private void update(Player player) {
         // Netty can close a channel before Paper removes its player from the online list.
         // That short disconnect window does not mean the client missed configuration.
@@ -99,6 +121,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         Season desiredColors = closed ? null : colors.apply(player.getWorld());
         SeasonClimatePolicy policy = climate.get();
         SeasonVisualResolver nextVisuals = visuals.get();
+        viewer.handler.requestLeaves(leafContext(player.getWorld()));
         // Biome effects are immutable after configuration. A palette edit uses
         // Paper's normal reconfiguration handshake rather than asking for reconnects.
         if (viewer.handler.reconfigurationRequested && !viewer.handler.reconfigurationStarted
@@ -171,6 +194,11 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private final PaperBiomePackets packets;
         private final Logger logger;
         private final Map<Long, byte[]> originals = new HashMap<>();
+        private final PaperLeafPackets.View leaves;
+        private final Supplier<Map<String, PaperLeafPackets.Context>> leafWorlds;
+        private volatile PaperLeafPackets.Context leafWanted;
+        private volatile boolean leafPending;
+        private final java.util.concurrent.atomic.AtomicBoolean leafPumpQueued = new java.util.concurrent.atomic.AtomicBoolean();
         private ChannelHandlerContext context;
         private volatile int originalCount;
         private int registrySize;
@@ -195,8 +223,27 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             this(packets, logger, policy, () -> null);
         }
         public ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy, Supplier<SeasonVisualResolver> visuals) {
+            this(packets, logger, policy, visuals, null, Map::of);
+        }
+        public ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy, Supplier<SeasonVisualResolver> visuals,
+                PaperLeafPackets leafPackets, Supplier<Map<String, PaperLeafPackets.Context>> leafWorlds) {
             this.packets = packets; this.logger = logger; this.policy = Objects.requireNonNull(policy);
             this.visuals = Objects.requireNonNull(visuals);
+            this.leaves = leafPackets == null ? null : leafPackets.view(); this.leafWorlds = leafWorlds;
+        }
+        private void requestLeaves(PaperLeafPackets.Context next) {
+            if (leaves == null || context == null || !context.channel().isActive() || retired) return;
+            boolean changed = !Objects.equals(leafWanted, next); leafWanted = next;
+            if (!changed && !leafPending || !leafPumpQueued.compareAndSet(false,true)) return;
+            context.executor().execute(() -> {
+                try {
+                    if (retired || !context.channel().isActive()) return;
+                    leaves.context(leafWanted);
+                    for (Object update : leaves.refresh(1)) context.write(update);
+                    context.flush(); leafPending = leaves.pending();
+                } catch (ReflectiveOperationException | RuntimeException failure) { fail(failure); }
+                finally { leafPumpQueued.set(false); }
+            });
         }
         private void rebuildClimate() {
             allowed = new boolean[biomeKeys.size()];
@@ -217,7 +264,15 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             }
         }
         @Override public void handlerAdded(ChannelHandlerContext context) { this.context = context; }
-        private void retire() { setPresentation(false, null, policy); retired = true; originals.clear(); }
+        private void retire() {
+            setPresentation(false, null, policy);
+            if (leaves != null) try {
+                leaves.context(null);
+                for (Object update : leaves.refresh(Integer.MAX_VALUE)) context.write(update);
+                context.flush(); leaves.clear();
+            } catch (ReflectiveOperationException | RuntimeException failure) { fail(failure); }
+            retired = true; originals.clear();
+        }
         private boolean canBind() { return originalCount > 0 && !retired; }
         public void setWinter(boolean desired) {
             setClimate(desired, policy);
@@ -258,9 +313,17 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 return registry.packet();
             }
             String simple = message.getClass().getSimpleName();
-            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; reconfigurationStarted = true; originals.clear(); }
+            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; reconfigurationStarted = true; originals.clear(); if(leaves!=null)leaves.clear(); }
             if (simple.equals("ClientboundLoginPacket")) configuring = false;
-            if (simple.equals("ClientboundLoginPacket") || simple.equals("ClientboundRespawnPacket")) originals.clear();
+            if (simple.equals("ClientboundLoginPacket") || simple.equals("ClientboundRespawnPacket")) {
+                originals.clear();
+                if(leaves!=null){
+                    leaves.clear();
+                    Object spawn = PaperBiomePackets.call(message,"commonPlayerSpawnInfo");
+                    String dimension = PaperBiomePackets.call(PaperBiomePackets.call(spawn,"dimension"),"identifier").toString();
+                    leafWanted = leafWorlds.get().get(dimension); leaves.context(leafWanted); leafPending = false;
+                }
+            }
             if (simple.equals("ClientboundBundlePacket")) {
                 List<Object> children = new ArrayList<>();
                 for (Object child : (Iterable<?>) PaperBiomePackets.call(message, "subPackets")) children.add(rewrite(child));
@@ -270,6 +333,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             if (packets.isChunk(message)) {
                 var mapped = packets.chunk(message, originalCount, registrySize, this::mappedBiome);
                 if (!retired) originals.put(packets.chunkKey(message), mapped.originalBiomes());
+                if (leaves != null && !retired) { Object painted=leaves.chunk(mapped.packet());leafPending=leaves.pending();return painted; }
                 return mapped.packet();
             }
             if (packets.isBiomes(message)) {
@@ -277,10 +341,14 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 if (!retired) for (var entry : mapped.originals().entrySet()) if (originals.containsKey(entry.getKey())) originals.put(entry.getKey(), entry.getValue());
                 return mapped.packet();
             }
-            if (packets.isForget(message)) originals.remove(packets.forgottenKey(message));
+            if (packets.isForget(message)) {
+                long key=packets.forgottenKey(message);originals.remove(key);
+                if(leaves!=null){leaves.forget((int)key,(int)(key>>32));leafPending=leaves.pending();}
+            }
+            if (leaves != null && !retired) { Object painted=leaves.update(message);leafPending=leaves.pending();return painted; }
             return message;
         }
-        @Override public void channelInactive(ChannelHandlerContext context) throws Exception { originals.clear(); super.channelInactive(context); }
+        @Override public void channelInactive(ChannelHandlerContext context) throws Exception { originals.clear(); if(leaves!=null)leaves.clear();super.channelInactive(context); }
         private void fail(Throwable failure) {
             logger.log(Level.SEVERE, "Native snowfall packet compatibility failed; closing affected connection to avoid invalid biome data", failure);
             if (context != null) context.close();

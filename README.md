@@ -4,12 +4,12 @@ Seasonal colors and reversible winter snow for Paper servers.
 
 True Seasons brings Minecraft's native snowfall to winter and adds snow to exposed terrain, roofs and leaf canopies. Exposed grass, flowers and leaf litter disappear beneath the snow and return when winter ends.
 
-**Latest prerelease: 0.1.9.** Seasonal colors, winter snow and weather are available.
+**Latest prerelease: 0.1.10.** Seasonal colors, winter snow and weather are available.
 
 ## Features
 
 - Follow a real-world calendar or choose a season manually.
-- Give grass and biome-tinted leaves seasonal colors, including warm autumn tones. Spruce keeps its normal color.
+- Give grass seasonal colors and autumn trees a stable yellow, orange or red appearance. Birch participates, cherry always turns red, and spruce keeps its normal color.
 - Update terrain one region at a time, even without players online. Player movement does not change the order.
 - Resume saved progress after a restart, without generating unexplored terrain.
 - Restore winter's temporary changes while preserving player replacements and existing snow.
@@ -20,13 +20,13 @@ Grass, ferns, flowers, bushes, mushrooms and leaf litter are saved before remova
 
 Deserts, badlands, savannas, jungles and other hot biomes skip winter snow and snowfall by default. Cold biomes keep their normal colors during summer. Saved biomes and natural snow remain unchanged.
 
-## Current limitations
+## Autumn trees
 
-- Seasonal grass and leaf colors may remain vanilla on BlueMap even after rendering finishes. This does not affect terrain and snow updates.
-- Autumn colors are chosen by biome, with no separate yellow, orange or red choice for each tree and no gradual autumn color transition.
-- Birch and leaves with fixed colors, including poplar, cherry and pale oak, keep their usual appearance. Colored birch and red autumn cherry trees are planned.
+Autumn uses Minecraft's yellow, orange and red poplar leaf appearances. Each tree's color remains stable across reloads. Oak, birch, jungle, acacia, dark oak and mangrove trees participate; cherry always uses red. Spruce, existing poplar, pale oak and azalea retain their normal appearance. Original leaf types, decay and drops stay unchanged. No resource pack is required.
 
-Colors are sent to players without changing saved biomes or leaf blocks. No resource pack is required.
+Colors follow the nearest matching trunk. Touching crowns can share a boundary, and connected logs are treated as one tree. Leaves without a usable trunk, unusually large structures or unavailable neighboring terrain retain their original appearance. Client colors finish updating as nearby chunks arrive. There is no gradual autumn color transition yet.
+
+Grass colors still follow the biome palettes in `visuals.yml`. Set `autumn-trees.enabled: false` there to keep ordinary leaf appearances.
 
 ## Install
 
@@ -96,7 +96,7 @@ True Seasons requests updates after a region's terrain changes finish and save. 
 
 Status shows waiting reasons and True Seasons' region render count since startup. BlueMap's own updates are separate. New terrain or later snow changes can require another render.
 
-Season or palette changes also queue color updates for existing map regions. These use the same render limits and wait for terrain changes to finish and save. Unchanged restarts and reloads do not repeat the color pass. Seasonal recoloring is experimental: a completed render can still show vanilla grass and leaf colors.
+Season or palette changes also queue color updates for existing map regions. These use the same render limits and wait for terrain changes to finish and save. Unchanged restarts and reloads do not repeat the color pass. BlueMap uses the same autumn tree choices and retains the original world data.
 
 Edit `visuals.yml` to choose colors, then run `/ts reload`. Some plugin stacks may ask players to reconnect to load changed palettes.
 

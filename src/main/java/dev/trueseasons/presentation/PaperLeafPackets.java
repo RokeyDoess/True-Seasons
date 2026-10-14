@@ -1,0 +1,164 @@
+package dev.trueseasons.presentation;
+
+import dev.trueseasons.visual.AutumnTreeColors;
+import it.unimi.dsi.fastutil.ints.*;
+import it.unimi.dsi.fastutil.shorts.*;
+import java.lang.reflect.*;
+import java.util.*;
+
+/** Viewer-local originals and appearances. All terrain comes from outgoing packets. */
+public final class PaperLeafPackets {
+    private static final int MAX_TREE_STATES=2_000_000;
+    final NativeLeafRegistry registry;
+    private final Field buffer, heightmaps, entities, extras, sectionPos, positions, updateStates;
+    private final Constructor<?> dataConstructor, chunkConstructor, blockConstructor, sectionConstructor;
+    private final Class<?> blockPacket, sectionPacket;
+    private final Method sectionOf;
+    public PaperLeafPackets() throws ReflectiveOperationException {
+        registry=new NativeLeafRegistry();
+        Class<?> data=type("net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData"), chunk=type("net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket");
+        buffer=field(data,"buffer");heightmaps=field(data,"heightmaps");entities=field(data,"blockEntitiesData");extras=field(data,"extraPackets");
+        dataConstructor=data.getDeclaredConstructor(Map.class,byte[].class,List.class);dataConstructor.setAccessible(true);
+        chunkConstructor=chunk.getConstructor(int.class,int.class,data,type("net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData"));
+        blockPacket=type("net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket");
+        blockConstructor=blockPacket.getConstructor(type("net.minecraft.core.BlockPos"),type("net.minecraft.world.level.block.state.BlockState"));
+        sectionPacket=type("net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket");
+        sectionPos=field(sectionPacket,"sectionPos");positions=field(sectionPacket,"positions");updateStates=field(sectionPacket,"states");
+        Class<?> section=type("net.minecraft.core.SectionPos");sectionOf=section.getMethod("of",int.class,int.class,int.class);
+        sectionConstructor=sectionPacket.getConstructor(section,Short2ObjectMap.class);
+        for(int i=0;i<registry.states.length;i++)stateIds.put(registry.states[i],i);
+    }
+    public record Context(long seed,int minY,int maxY,boolean autumn) {}
+    private static final class Chunk {
+        final int x,z,minY,maxY;
+        final Int2IntOpenHashMap original=new Int2IntOpenHashMap(), shown=new Int2IntOpenHashMap();
+        boolean complete=true;
+        Chunk(int x,int z,int minY,int maxY){this.x=x;this.z=z;this.minY=minY;this.maxY=maxY;original.defaultReturnValue(-1);shown.defaultReturnValue(-1);}
+        int key(int x,int y,int z){return ((y-minY)<<8)|((z&15)<<4)|(x&15);}
+    }
+    public final class View {
+        private final Map<Long,Chunk> chunks=new HashMap<>();
+        private final ArrayDeque<Long> pending=new ArrayDeque<>();
+        private final Set<Long> queued=new HashSet<>();
+        private Context context;
+        private AutumnTreeColors.Session session;
+        private boolean clearAfterRestore;
+        private int storedStates;
+        public void context(Context next){
+            if(next==null){
+                if(context==null||clearAfterRestore)return;
+                if(chunks.isEmpty()){context=null;return;}
+                clearAfterRestore=true;
+                context=new Context(context.seed,context.minY,context.maxY,false);invalidate();chunks.keySet().forEach(this::queue);
+                return;
+            }
+            clearAfterRestore=false;
+            if(Objects.equals(context,next))return;
+            if(context!=null&&(context.seed!=next.seed||context.minY!=next.minY||context.maxY!=next.maxY))clear();
+            context=next;invalidate();chunks.keySet().forEach(this::queue);
+        }
+        public void clear(){chunks.clear();pending.clear();queued.clear();storedStates=0;session=null;clearAfterRestore=false;}
+        private void invalidate(){session=null;}
+        private void queue(long key){if(chunks.containsKey(key)&&queued.add(key))pending.addLast(key);}
+        private void nearby(int x,int z){for(int dx=-2;dx<=2;dx++)for(int dz=-2;dz<=2;dz++)queue(PaperBiomePackets.key(x+dx,z+dz));}
+        private AutumnTreeColors.Kind sample(int x,int y,int z){
+            if(context==null)return AutumnTreeColors.Kind.UNKNOWN;
+            if(y<context.minY||y>=context.maxY)return AutumnTreeColors.Kind.OTHER;
+            Chunk chunk=chunks.get(PaperBiomePackets.key(x>>4,z>>4));
+            if(chunk==null||!chunk.complete)return AutumnTreeColors.Kind.UNKNOWN;
+            int state=chunk.original.get(chunk.key(x,y,z));return state<0?AutumnTreeColors.Kind.OTHER:registry.kind(state);
+        }
+        private int appearance(Chunk chunk,int key,int original){
+            if(context==null||!context.autumn||!chunk.complete||!registry.kind(original).leaves())return original;
+            if(session==null)session=new AutumnTreeColors.Session(context.seed,this::sample);
+            return registry.painted(original,session.appearanceAt((chunk.x<<4)|(key&15),chunk.minY+(key>>8),(chunk.z<<4)|((key>>4)&15)));
+        }
+        private void shown(Chunk chunk,int key,int original,int painted){if(original==painted)chunk.shown.remove(key);else chunk.shown.put(key,painted);}
+        public Object chunk(Object packet) throws ReflectiveOperationException {
+            if(context==null)return packet;
+            int x=(int)call(packet,"x"),z=(int)call(packet,"z");long key=PaperBiomePackets.key(x,z);
+            Object old=call(packet,"chunkData");byte[] bytes=(byte[])buffer.get(old);
+            List<LeafWireCodec.Section> sections=LeafWireCodec.read(bytes,registry::relevant);
+            Chunk source=new Chunk(x,z,context.minY,context.minY+sections.size()*16);
+            for(int section=0;section<sections.size();section++){
+                int[] states=sections.get(section).states();if(states==null)continue;
+                for(int i=0;i<4096;i++)if(registry.relevant(states[i]))source.original.put((section<<12)|i,states[i]);
+            }
+            Chunk previous=chunks.remove(key);if(previous!=null)storedStates-=previous.original.size();
+            if(storedStates+source.original.size()>MAX_TREE_STATES){invalidate();nearby(x,z);return packet;}
+            chunks.put(key,source);storedStates+=source.original.size();invalidate();nearby(x,z);
+            if(!context.autumn)return packet;
+            byte[] mapped=LeafWireCodec.write(sections,registry.states.length,(section,index,original)->{
+                int local=(section<<12)|index,painted=appearance(source,local,original);shown(source,local,original,painted);return painted;
+            });
+            return copyChunk(packet,old,mapped);
+        }
+        public Object update(Object packet) throws ReflectiveOperationException {
+            if(context==null||(!blockPacket.isInstance(packet)&&!sectionPacket.isInstance(packet)))return packet;
+            if(blockPacket.isInstance(packet)){
+                Object pos=call(packet,"getPos"),state=call(packet,"getBlockState");
+                int x=(int)call(pos,"getX"),y=(int)call(pos,"getY"),z=(int)call(pos,"getZ"),id=id(state);
+                Chunk chunk=changed(x,y,z,id);if(chunk==null)return packet;
+                int key=chunk.key(x,y,z),painted=appearance(chunk,key,id);shown(chunk,key,id,painted);
+                return painted==id?packet:blockConstructor.newInstance(pos,registry.states[painted]);
+            }
+            Object section=sectionPos.get(packet);int sx=(int)call(section,"x"),sy=(int)call(section,"y"),sz=(int)call(section,"z");
+            short[] at=(short[])positions.get(packet);Object[] states=(Object[])updateStates.get(packet);
+            // Apply the entire original batch before resolving any canopy against its logs.
+            for(int i=0;i<at.length;i++)changed((sx<<4)|((at[i]>>8)&15),(sy<<4)|(at[i]&15),(sz<<4)|((at[i]>>4)&15),id(states[i]));
+            Chunk chunk=chunks.get(PaperBiomePackets.key(sx,sz));if(chunk==null||(sy<<4)<chunk.minY||(sy<<4)>=chunk.maxY)return packet;
+            Short2ObjectOpenHashMap<Object> mapped=new Short2ObjectOpenHashMap<>();boolean differs=false;
+            for(int i=0;i<at.length;i++){
+                int x=(sx<<4)|((at[i]>>8)&15),y=(sy<<4)|(at[i]&15),z=(sz<<4)|((at[i]>>4)&15),original=id(states[i]);
+                int key=chunk.key(x,y,z),painted=appearance(chunk,key,original);shown(chunk,key,original,painted);differs|=original!=painted;
+                mapped.put(at[i],registry.states[painted]);
+            }
+            return differs?sectionConstructor.newInstance(section,mapped):packet;
+        }
+        private Chunk changed(int x,int y,int z,int state){
+            Chunk chunk=chunks.get(PaperBiomePackets.key(x>>4,z>>4));if(chunk==null||y<chunk.minY||y>=chunk.maxY)return null;
+            int key=chunk.key(x,y,z),old=chunk.original.get(key);
+            boolean relevant=registry.relevant(state);
+            if(old==state||old<0&&!relevant)return chunk;
+            if(old>=0){chunk.original.remove(key);storedStates--;}
+            if(relevant){if(storedStates<MAX_TREE_STATES){chunk.original.put(key,state);storedStates++;}else chunk.complete=false;}
+            chunk.shown.remove(key);invalidate();nearby(chunk.x,chunk.z);return chunk;
+        }
+        public void forget(int x,int z){Chunk old=chunks.remove(PaperBiomePackets.key(x,z));if(old!=null){storedStates-=old.original.size();invalidate();nearby(x,z);}}
+        /** One chunk per ordinary tick; shutdown can explicitly drain remaining restorations. */
+        public List<Object> refresh(int budget) throws ReflectiveOperationException {
+            List<Object> result=new ArrayList<>();
+            for(int count=0;count<budget&&!pending.isEmpty();count++){
+                long key=pending.removeFirst();queued.remove(key);Chunk chunk=chunks.get(key);if(chunk==null)continue;
+                Map<Integer,Short2ObjectOpenHashMap<Object>> updates=new LinkedHashMap<>();
+                IntSet inspect=new IntOpenHashSet(chunk.original.keySet());inspect.addAll(chunk.shown.keySet());
+                for(int local:inspect){int original=chunk.original.get(local);if(original<0)continue;
+                    int painted=appearance(chunk,local,original),previous=chunk.shown.getOrDefault(local,original);
+                    if(previous==painted)continue;
+                    int y=chunk.minY+(local>>8),section=y>>4;
+                    short at=(short)(((local&15)<<8)|(((local>>4)&15)<<4)|(y&15));
+                    updates.computeIfAbsent(section,k->new Short2ObjectOpenHashMap<>()).put(at,registry.states[painted]);shown(chunk,local,original,painted);
+                }
+                for(var row:updates.entrySet())result.add(sectionConstructor.newInstance(sectionOf.invoke(null,chunk.x,row.getKey(),chunk.z),row.getValue()));
+            }
+            if(pending.isEmpty()&&clearAfterRestore){clear();context=null;}
+            return result;
+        }
+        public boolean pending(){return !pending.isEmpty();}
+        public int retainedStates(){return storedStates;}
+    }
+    public View view(){return new View();}
+    private final Map<Object,Integer> stateIds=new IdentityHashMap<>();
+    private int id(Object state){
+        // Read-only after construction; native BlockState objects are immutable registry singletons.
+        Integer id=stateIds.get(state);if(id==null)throw new IllegalArgumentException("Unknown block update state");return id;
+    }
+    private Object copyChunk(Object packet,Object old,byte[] bytes) throws ReflectiveOperationException {
+        Object copy=dataConstructor.newInstance(heightmaps.get(old),bytes,entities.get(old));extras.set(copy,extras.get(old));
+        copy.getClass().getMethod("setReady",boolean.class).invoke(copy,true);
+        return chunkConstructor.newInstance(call(packet,"x"),call(packet,"z"),copy,call(packet,"lightData"));
+    }
+    private static Class<?> type(String name)throws ClassNotFoundException{return Class.forName(name);}
+    private static Object call(Object object,String method)throws ReflectiveOperationException{return PaperBiomePackets.call(object,method);}
+    private static Field field(Class<?> type,String name)throws ReflectiveOperationException{Field result=type.getDeclaredField(name);result.setAccessible(true);return result;}
+}

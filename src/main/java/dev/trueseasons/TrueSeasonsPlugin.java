@@ -159,9 +159,10 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     }
     private void updateVisualState() {
         Set<UUID> enabledWorlds = new HashSet<>();
+        Map<UUID, Long> worldSeeds = new HashMap<>();
         if (!state.cleanup && !state.clean && settings.enabled && visuals.enabled())
-            for (World world : Bukkit.getWorlds()) if (eligible(world)) enabledWorlds.add(world.getUID());
-        var next = new SeasonalVisualState(visuals, season, enabledWorlds);
+            for (World world : Bukkit.getWorlds()) if (eligible(world)) { enabledWorlds.add(world.getUID()); worldSeeds.put(world.getUID(), world.getSeed()); }
+        var next = new SeasonalVisualState(visuals, season, enabledWorlds, worldSeeds);
         if (!next.equals(visualState)) visualState = next;
     }
     @Override public Season getCurrentSeason(World world) { return season; }

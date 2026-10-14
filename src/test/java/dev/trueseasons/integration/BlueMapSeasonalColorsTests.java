@@ -60,7 +60,7 @@ public final class BlueMapSeasonalColorsTests {
     }
     private static ResourceModelRenderer renderer(MapFixture fixture) throws Exception {
         ThreadLocal<?> passes = (ThreadLocal<?>) field(fixture.manager, "renderPasses");
-        Object pass = ((Collection<?>) passes.get()).iterator().next();
+        Object pass = BlueMapSeasonalColors.nativePass(((Collection<?>) passes.get()).iterator().next());
         Object renderer = field(pass, "blockRenderer"), cache = field(renderer, "blockRenderers");
         Object resourceRenderer = renderer.getClass().getDeclaredField("blockRenderers").getType().getMethod("get", Object.class).invoke(cache, BlockRendererType.DEFAULT);
         return (ResourceModelRenderer) resourceRenderer;

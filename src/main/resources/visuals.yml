@@ -1,7 +1,11 @@
 # Seasonal grass and biome-tinted leaves, in game and on BlueMap.
-# Spruce and other fixed-colour leaves keep their normal appearance.
+# Autumn trees use vanilla colored poplar leaf appearances; spruce stays unchanged.
 # Saved biome IDs and leaf blocks remain untouched.
 enabled: true
+autumn-trees:
+  # Client/render-only appearance. Saved leaves, decay and drops stay original.
+  # Birch participates; cherry always uses red. No resource pack required.
+  enabled: true
 families:
   evergreen: [taiga, grove]
   dry: [savanna, desert, badlands]

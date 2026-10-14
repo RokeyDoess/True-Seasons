@@ -4,7 +4,6 @@ about: Suggest a feature or improvement
 title: ''
 labels: enhancement
 assignees: RokeyDoess
-type: Feature
 ---
 
 **What would you like to change?**

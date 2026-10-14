@@ -1,5 +1,9 @@
 # True Seasons
 
+[![Latest prerelease](https://img.shields.io/github/v/release/RokeyDoess/True-Seasons?include_prereleases)](https://github.com/RokeyDoess/True-Seasons/releases)
+[![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
 Seasonal colors and reversible winter snow for Paper servers.
 
 True Seasons brings Minecraft's native snowfall to winter and adds snow to exposed terrain, roofs and leaf canopies. Exposed grass, flowers and leaf litter disappear beneath the snow and return when winter ends.
@@ -25,6 +29,8 @@ Deserts, badlands, savannas, jungles and other hot biomes skip winter snow and s
 Autumn uses Minecraft's yellow, orange and red poplar leaf appearances. Each tree's color remains stable across reloads. Oak, birch, jungle, acacia, dark oak and mangrove trees participate; cherry always uses red. Spruce, existing poplar, pale oak and azalea retain their normal appearance. Original leaf types, decay and drops stay unchanged. No resource pack is required.
 
 Colors follow the nearest matching trunk. Touching crowns can share a boundary, and connected logs are treated as one tree. Leaves without a usable trunk, unusually large structures or unavailable neighboring terrain retain their original appearance. Client colors finish updating as nearby chunks arrive. There is no gradual autumn color transition yet.
+
+Some overlapping oak and birch crowns can retain green leaves until a client refresh. Decorative leaves without a trunk may also keep their usual appearance. Improvements are planned.
 
 Grass colors still follow the biome palettes in `visuals.yml`. Set `autumn-trees.enabled: false` there to keep ordinary leaf appearances.
 
@@ -124,3 +130,7 @@ Cleanup restores saved plants and removes the plugin's snow while preserving pla
 If the plugin remains installed after cleanup, seasons stay disabled until `/ts season sync` or `/ts season set ...`.
 
 Distant Horizons support is planned. See the [Changelog](docs/CHANGELOG.md) and [Roadmap](docs/ROADMAP.md).
+
+## Help and contributions
+
+See [Getting help](SUPPORT.md) for questions and bug reports, or [Contributing](CONTRIBUTING.md) to help with the project. Security problems have a [private reporting route](SECURITY.md). Community conversations follow the [community guidelines](CODE_OF_CONDUCT.md).

@@ -14,7 +14,9 @@ dependencies {
     compileOnly("it.unimi.dsi:fastutil:8.5.18")
     testRuntimeOnly("it.unimi.dsi:fastutil:8.5.18")
     testRuntimeOnly("io.papermc.paper:paper-api:26.3.build.177-stable")
+    testImplementation("de.bluecolored:bluemap-api:2.7.7")
     testImplementation("de.bluecolored:bluemap-core:5.29")
+    testImplementation("de.bluecolored:bluemap-common:5.29")
 }
 configurations.testCompileOnly { extendsFrom(configurations.compileOnly.get()) }
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(25)) }
@@ -25,6 +27,8 @@ tasks.register<JavaExec>("coreTest") {
     mainClass.set("dev.trueseasons.CoreTests")
 }
 tasks.check { dependsOn("coreTest") }
+// Regression suites are standalone Java entry points, registered with check below.
+tasks.test { enabled = false }
 listOf(
     "migrationTest" to "dev.trueseasons.migration.MigrationBookkeepingTests",
     "regionReadinessTest" to "dev.trueseasons.migration.RegionReadinessTests",
@@ -43,6 +47,7 @@ listOf(
     "blueMapReliabilityTest" to "dev.trueseasons.integration.BlueMapReliabilityTests",
     "blueMapRegionTest" to "dev.trueseasons.integration.BlueMapRegionTests",
     "blueMapRecoveryTest" to "dev.trueseasons.integration.BlueMapRecoveryTests",
+    "blueMapReceiptTest" to "dev.trueseasons.integration.BlueMapReceiptTests",
     "blueMapJournalTest" to "dev.trueseasons.integration.BlueMapJournalTests",
     "blueMapSeasonalColorsTest" to "dev.trueseasons.integration.BlueMapSeasonalColorsTests",
     "blueMapVisualQueueTest" to "dev.trueseasons.integration.BlueMapVisualQueueTests",

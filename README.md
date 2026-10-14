@@ -2,6 +2,7 @@
 
 [![Latest prerelease](https://img.shields.io/github/v/release/RokeyDoess/True-Seasons?include_prereleases)](https://github.com/RokeyDoess/True-Seasons/releases)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
+[![Minecraft: 26.3](https://img.shields.io/badge/Minecraft-26.3-brightgreen)](#install)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 Seasonal colors and reversible winter snow for Paper servers.

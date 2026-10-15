@@ -8,7 +8,7 @@ migration:
   max-chunks-per-tick: 1
   max-millis-per-tick: 3.0
   pause-below-tps: 18.5
-  # Loaded player-nearby snowstorm radius only; never reorders region migration.
+  # Legacy setting retained for compatibility. Storms now follow visible chunks.
   player-radius-chunks: 4
   # Complete one saved region before moving to the next, independent of players.
   # Read region headers again periodically to include externally generated chunks.
@@ -16,6 +16,8 @@ migration:
   # Informational invariant: True Seasons never offers generation-enabled loads.
   generate-missing-chunks: false
 climate:
+  # Hot biomes retain their normal grass and leaf appearances during autumn.
+  autumn-excluded-biome-fragments: [desert, badlands, savanna, jungle, warm_ocean]
   # Match fragments of biome registry keys. [] permits winter in all biomes.
   winter-excluded-biome-fragments: [desert, badlands, savanna, jungle, warm_ocean]
   # Cold biomes keep their normal colours during summer.

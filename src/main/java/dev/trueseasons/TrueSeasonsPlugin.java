@@ -54,10 +54,11 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             engine = new ChunkMigrationEngine(this);
             integrations.setRegionReadiness(engine::regionReady);
             Bukkit.getPluginManager().registerEvents(snow, this);
-            weather = new WeatherService(this);
+            weather = new WeatherService(this,world->presentation!=null&&presentation.snowRevealPending(world));
             presentation = new NativeSnowPresentation(this, world -> settings.weather && settings.winterSnowfall
                 && eligible(world) && season == Season.WINTER && !state.cleanup && !state.clean, () -> settings.climate,
-                world -> visualState.active(world.getUID()) ? visualState.season() : null, () -> visuals);
+                world -> visualState.active(world.getUID()) ? visualState.season() : null, () -> visuals,
+                snow,engine::globalCoverageColumns,this::version,this::winterEnabled);
             Bukkit.getPluginManager().registerEvents(weather, this);
             replenishment = new SnowReplenishmentService(this,snow,this::settings,this::version,
                 world -> season==Season.WINTER&&eligible(world)&&!state.cleanup&&!state.clean

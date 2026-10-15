@@ -10,6 +10,7 @@ public final class SeasonClimateTests {
         var policy = new SeasonClimatePolicy(SeasonClimatePolicy.HOT, SeasonClimatePolicy.COLD);
         for (String biome : List.of("desert","badlands","wooded_badlands","eroded_badlands","savanna","savanna_plateau","windswept_savanna","jungle","sparse_jungle","bamboo_jungle","warm_ocean")) {
             check(!policy.applies(Season.WINTER,"minecraft:"+biome), "Winter excludes hot " + biome);
+            check(!policy.applies(Season.AUTUMN,"minecraft:"+biome), "Autumn excludes hot " + biome);
             check(policy.applies(Season.SUMMER,"minecraft:"+biome), "Hot summer remains applicable");
         }
         for (String biome : List.of("snowy_plains","snowy_taiga","snowy_beach","frozen_river","frozen_ocean","deep_frozen_ocean","ice_spikes","grove","jagged_peaks","frozen_peaks","cold_ocean","deep_cold_ocean")) {
@@ -19,6 +20,11 @@ public final class SeasonClimateTests {
         for (Season season : Season.values()) check(policy.applies(season,"minecraft:plains"), "Temperate seasons are unaffected");
         check(policy.paletteSeason(Season.SUMMER,"minecraft:frozen_peaks") == Season.WINTER, "Cold palette stays cold during summer");
         check(policy.paletteSeason(Season.WINTER,"minecraft:jungle") == Season.SUMMER, "Hot palette stays warm during winter");
+        check(policy.paletteSeason(Season.AUTUMN,"minecraft:jungle") == Season.SUMMER, "Hot palette stays warm during autumn");
+        var customAutumn = new SeasonClimatePolicy(SeasonClimatePolicy.HOT,SeasonClimatePolicy.COLD,List.of());
+        check(customAutumn.applies(Season.AUTUMN,"minecraft:jungle"),"Autumn exclusions can be overridden independently");
+        check(customAutumn.sameWinter(policy),"Autumn-only edits do not reopen snow migration");
+        check(!customAutumn.equals(policy)&&!customAutumn.signature().equals(policy.signature()),"Autumn-only edits invalidate seasonal colors");
         check(new SeasonClimatePolicy(List.of("custom:tropical"),List.of()).applies(Season.WINTER,"minecraft:desert"), "Explicit custom lists replace climate defaults");
         check(SeasonClimatePolicy.ALL.applies(Season.WINTER,"minecraft:desert"), "Empty list explicitly permits hot winter");
         check(new SeasonClimatePolicy(List.of("jungle","desert"),List.of()).sameWinter(new SeasonClimatePolicy(List.of("desert","jungle","jungle"),List.of("snowy"))), "Summer-only changes and reordered fragments do not reopen winter terrain");

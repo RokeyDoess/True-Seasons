@@ -27,7 +27,7 @@ public final class AutumnTreeColorsTests {
         }
     }
     public static void main(String[] args) {
-        classification(); wholeTrees(); touchingCrowns(); crossChunk(); branches(); bounded(); invalidation();
+        classification(); wholeTrees(); touchingCrowns(); decorative(); crossChunk(); branches(); bounded(); invalidation();
         System.out.println("Autumn tree colors: " + checks + " assertions passed");
     }
     private static void classification() {
@@ -82,6 +82,17 @@ public final class AutumnTreeColorsTests {
         // Different species never claim one another's logs.
         World mixed=new World();mixed.tree(0,0,"oak");mixed.tree(6,0,"birch");
         check(new Session(20,mixed).appearanceAt(1,5,0)==left,"nearby birch cannot anchor oak");
+        World interrupted=new World();interrupted.set(0,5,0,Kind.OAK_LOG);interrupted.set(1,5,0,Kind.BIRCH_LEAVES);interrupted.set(2,5,0,Kind.OAK_LEAVES);
+        World reference=new World();reference.set(0,5,0,Kind.OAK_LOG);reference.set(1,5,0,Kind.OAK_LEAVES);
+        check(new Session(20,interrupted).appearanceAt(2,5,0)==new Session(20,reference).appearanceAt(1,5,0),"mixed intersecting leaves do not break matching trunk path");
+    }
+    private static void decorative(){
+        World floating=new World();floating.set(3,5,3,Kind.BIRCH_LEAVES);
+        Appearance expected=new Session(99,floating).appearanceAt(3,5,3);
+        check(expected!=Appearance.ORIGINAL,"trunkless leaves have seasonal appearance");
+        Sampler persistent=new Sampler(){public Kind kindAt(int x,int y,int z){return Kind.BIRCH_LEAVES;}public boolean persistentAt(int x,int y,int z){return true;}};
+        Session hedge=new Session(99,persistent);
+        for(int x=-100;x<100;x++)check(hedge.appearanceAt(x,20,-1)==expected,"persistent hedge coherent without neighbors or trunk");
     }
     private static void crossChunk() {
         World world=new World();world.tree(15,0,"birch");
@@ -123,14 +134,14 @@ public final class AutumnTreeColorsTests {
         check(new Session(1,huge).appearanceAt(0,0,0)==Appearance.ORIGINAL,"oversized log network left unchanged");
         check(huge.reads<=AutumnTreeColors.MAX_SEARCH_READS+1,"adversarial log network bounded reads");
         World floating=new World();for(int x=-10;x<=10;x++)for(int y=-10;y<=10;y++)for(int z=-10;z<=10;z++)floating.set(x,y,z,Kind.OAK_LEAVES);
-        check(new Session(1,floating).appearanceAt(0,0,0)==Appearance.ORIGINAL,"unsupported leaf mass unchanged");
+        check(new Session(1,floating).appearanceAt(0,0,0)!=Appearance.ORIGINAL,"trunkless leaf mass receives stable decorative fallback");
         check(floating.reads<=AutumnTreeColors.MAX_LEAF_SEARCH+1,"unsupported leaf mass bounded reads");
     }
     private static void invalidation() {
         World world=new World();world.tree(0,0,"oak");Session view=new Session(5,world);
         check(view.appearanceAt(1,5,0)!=Appearance.ORIGINAL,"initial tree colored");
         world.blocks.replaceAll((position,kind)->kind.log()?Kind.OTHER:kind);view.invalidate();
-        check(view.appearanceAt(1,5,0)==Appearance.ORIGINAL,"invalidation respects removed trunk");
+        check(view.appearanceAt(1,5,0)!=Appearance.ORIGINAL,"trunkless surviving leaves remain seasonal after invalidation");
         world.set(100,100,100,Kind.CHERRY_LEAVES);
         check(view.appearanceAt(100,100,100)==Appearance.RED,"cherry hardcoded red including standalone leaves");
     }

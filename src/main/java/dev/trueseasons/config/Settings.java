@@ -79,7 +79,9 @@ public final class Settings {
             ? main.getStringList("climate.winter-excluded-biome-fragments") : SeasonClimatePolicy.HOT);
         winterExcluded.addAll(excludedBiomes);
         climate = new SeasonClimatePolicy(winterExcluded, main.contains("climate.summer-excluded-biome-fragments")
-            ? main.getStringList("climate.summer-excluded-biome-fragments") : SeasonClimatePolicy.COLD);
+            ? main.getStringList("climate.summer-excluded-biome-fragments") : SeasonClimatePolicy.COLD,
+            main.contains("climate.autumn-excluded-biome-fragments")
+            ? main.getStringList("climate.autumn-excluded-biome-fragments") : SeasonClimatePolicy.HOT);
         weatherConfig = files.get("weather"); weather = weatherConfig.getBoolean("enabled", true);
         winterStorm = weatherConfig.getBoolean("winter-storm.start-on-winter", true);
         boolean legacyStormTimer=weatherConfig.contains("winter-storm.duration-seconds");

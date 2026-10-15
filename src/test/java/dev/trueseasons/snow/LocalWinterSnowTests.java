@@ -4,10 +4,12 @@ import dev.trueseasons.api.Season;
 import dev.trueseasons.migration.PlayerNeighborhood;
 import java.io.IOException;
 import java.lang.reflect.Proxy;
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import org.bukkit.*;
 import org.bukkit.block.BlockState;
 import org.bukkit.event.block.BlockFormEvent;
+import org.bukkit.entity.Player;
 import org.bukkit.persistence.PersistentDataType;
 
 /** Local storm must own edits without advancing or completing region migration. */
@@ -88,7 +90,7 @@ public final class LocalWinterSnowTests {
             check(!f.snow.hasPending(f.chunk) && f.snow.coveredColumns(f.chunk, VERSION) == 0,
                 "Local ownership alone does not resume or fabricate the background cursor");
         }
-        groundCover(); nativeGuard();
+        groundCover(); nativeGuard(); visibleTerrain();
         System.out.println("Local winter snow tests passed: " + checks + " assertions");
     }
     private static void groundCover() throws Exception {
@@ -142,6 +144,56 @@ public final class LocalWinterSnowTests {
             new WinterGroundCoverTests.Value(PersistentDataType.STRING, VERSION));
         event = new BlockFormEvent(f.block(65), state); guard.capNaturalSnow(event);
         check(!event.isCancelled(), "Completed region chunks may retain ordinary native snowfall despite the global local cap");
+    }
+    private static final class VisibilityFixture {
+        final SnowReplenishmentTests.Fixture terrain = fixture();
+        boolean seen = true, active = true;
+        int x = 4096, z = -4096, viewerQueries;
+        final Player viewer = (Player)Proxy.newProxyInstance(Player.class.getClassLoader(), new Class<?>[]{Player.class}, (p,m,a) -> {
+            if (m.getName().equals("hashCode")) return 1;
+            if (m.getName().equals("equals")) return p == a[0];
+            throw new AssertionError("Visibility must not query player position or view-distance settings: " + m.getName());
+        });
+        final Chunk chunk = (Chunk)Proxy.newProxyInstance(Chunk.class.getClassLoader(),new Class<?>[]{Chunk.class},(p,m,a)->{
+            if (m.getName().equals("getPlayersSeeingChunk")) { viewerQueries++; return seen ? Set.of(viewer) : Set.of(); }
+            if (m.getName().equals("getX")) return x;
+            if (m.getName().equals("getZ")) return z;
+            try { return m.invoke(terrain.chunk,a); }
+            catch (InvocationTargetException failure) { throw failure.getCause(); }
+        });
+        final LocalWinterSnowService service = new LocalWinterSnowService(terrain.snow,
+            () -> { throw new AssertionError("Visibility must not read radius settings"); }, () -> VERSION,
+            world -> true, world -> active, () -> 256, null, ignored -> {}, ignored -> {});
+        SeasonalSnowService.Result place(Runnable before) throws Exception {
+            return terrain.snow.accumulateLocalColumns(chunk, VERSION, 256, new int[]{0}, POLICY, false,
+                terrain.snowData, target -> { terrain.permitMutation.accept(target); return true; },
+                ignored -> { terrain.before++; before.run(); }, ignored -> terrain.after++,
+                Long.MAX_VALUE, () -> service.ready(chunk));
+        }
+    }
+    private static void visibleTerrain() throws Exception {
+        var visible = new VisibilityFixture();
+        check(visible.service.ready(visible.chunk), "Distant sent chunks receive storm accumulation without a small player radius");
+        check(visible.place(() -> {}).placed() == 1, "Visible distant terrain follows the unchanged ownership and coverage placement path");
+        check(visible.viewerQueries > 1, "Placement rechecks actual viewers rather than retaining a stale visibility snapshot");
+        var unseen = new VisibilityFixture(); unseen.x = unseen.z = 0; unseen.seen = false;
+        check(!unseen.service.ready(unseen.chunk), "Nearby loaded terrain without a viewer is ineligible");
+        check(unseen.service.accumulate(unseen.chunk,new int[]{0}).placed() == 0 && unseen.terrain.heightReads == 0,
+            "Unseen close chunks stop before cooldown, configuration or terrain access");
+        var lost = new VisibilityFixture(); lost.terrain.permitMutation = ignored -> lost.seen = false;
+        var result = lost.place(() -> {});
+        check(result.placed() == 0 && lost.terrain.before == 0 && !lost.terrain.metadata.containsKey(lost.terrain.owned),
+            "Losing the final viewer during formation prevents ownership and physical edits");
+        var duringIntent = new VisibilityFixture(); result = duringIntent.place(() -> duringIntent.seen = false);
+        check(result.placed() == 0 && duringIntent.terrain.before == 1 && duringIntent.terrain.after == 1
+                && !duringIntent.terrain.metadata.containsKey(duringIntent.terrain.owned),
+            "Viewer loss during durable intent retires that intent without placing snow");
+        var unloaded = new VisibilityFixture(); unloaded.terrain.loaded = false;
+        check(!unloaded.service.ready(unloaded.chunk) && unloaded.viewerQueries == 0,
+            "Unloaded terrain is rejected before visibility queries and never loaded");
+        var paused = new VisibilityFixture(); paused.active = false;
+        check(!paused.service.ready(paused.chunk) && paused.viewerQueries == 0,
+            "Existing activity and performance gates precede viewer checks");
     }
     private static void check(boolean condition, String label) { checks++; if (!condition) throw new AssertionError(label); }
 }

@@ -46,12 +46,13 @@ public final class BlueMapSavedTileTests {
     private static final class SavedWorld implements World {
         final Map<String,BlockState> blocks = new HashMap<>();
         final Map<String,BlockState> parsed = new HashMap<>();
+        Biome biome=Biome.DEFAULT;
         final Chunk chunk = new Chunk() {
             public boolean isGenerated() { return true; }
             public boolean hasLightData() { return true; }
             public BlockState getBlockState(int x,int y,int z) { return blocks.getOrDefault(x+","+y+","+z,BlockState.AIR); }
             public LightData getLightData(int x,int y,int z,LightData output) { return output.set(15,0); }
-            public Biome getBiome(int x,int y,int z) { return Biome.DEFAULT; }
+            public Biome getBiome(int x,int y,int z) { return biome; }
             public int getMinY(int x,int z) { return 0; }
             public int getMaxY(int x,int z) { return 16; }
         };
@@ -166,6 +167,26 @@ public final class BlueMapSavedTileTests {
             hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(id),Map.of(id,1234L))); column+=4;
         }
         byte[] autumnSpruce=render(map,storage,16,0,lowres);
+        // Persistent decorative leaves need no matching log or surrounding loaded crown.
+        source.put(20,8,0,"minecraft:birch_leaves[distance=7,persistent=true,waterlogged=false]");
+        byte[] decorative=render(map,storage,20,0,lowres);
+        var decorativeSelection=new AutumnTreeColors.Session(1234L,new AutumnTreeColors.Sampler(){
+            public AutumnTreeColors.Kind kindAt(int x,int y,int z){return AutumnTreeColors.Kind.BIRCH_LEAVES;}
+            public boolean persistentAt(int x,int y,int z){return true;}
+        });
+        hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of()));
+        source.put(20,8,0,decorativeSelection.appearanceAt(20,8,0).blockKey()+"[distance=7,persistent=true,waterlogged=false]");
+        check(Arrays.equals(decorative,render(map,storage,20,0,lowres)),"decorative hedge saved tile exactly matches native selected poplar");
+        source.blocks.clear();source.blocks.putAll(original);
+        hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(id),Map.of(id,1234L)));
+        source.biome=(Biome)Proxy.newProxyInstance(Biome.class.getClassLoader(),new Class<?>[]{Biome.class},(proxy,method,arguments)->
+            method.getName().equals("getKey")?Key.minecraft("desert"):method.invoke(Biome.DEFAULT,arguments));
+        // Compare the hook against the exact same native biome and saved block data.
+        byte[] hotGrass=render(map,storage,0,0,lowres),hotBirch=render(map,storage,8,0,lowres);
+        hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of()));
+        check(Arrays.equals(hotGrass,render(map,storage,0,0,lowres)),"hot autumn biome saved grass remains native");
+        check(Arrays.equals(hotBirch,render(map,storage,8,0,lowres)),"hot autumn biome saved birch remains native");
+        source.biome=Biome.DEFAULT;
         hook.close();
         check(Arrays.equals(autumnSpruce,render(map,storage,16,0,lowres)),"spruce native saved tile remains unchanged");
         check(Arrays.equals(nativeGrass,render(map,storage,0,0,lowres)),"detaching presentation restores exact native grass tile");

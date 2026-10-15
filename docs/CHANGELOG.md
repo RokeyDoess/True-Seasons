@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.11
+
+- Reveal winter snow gradually across the terrain players can see, while keeping background updates in region order.
+- Extend the local snowstorm to visible chunks. BlueMap still renders saved regions without extra updates for the gradual reveal.
+- Match grass, podzol and mycelium sides to the snow reveal, and keep the opening storm running until players' final snow updates finish.
+- Fix green patches in overlapping autumn tree crowns and add seasonal colors to player-placed leaves and hedges.
+- Keep hot biomes free of autumn grass and tree changes, in game and on BlueMap.
+
+Known limitations: snow in unfinished terrain can lag behind the transition percentage, and its distribution can form visible bands. Cherry ground petals remain pink; there is no matching red vanilla appearance.
+
 ## 0.1.10
 
 - Give autumn trees stable yellow, orange or red leaf appearances without a resource pack or saved leaf changes. Include birch, make cherry red only and leave spruce unchanged.

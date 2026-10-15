@@ -7,6 +7,8 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Predicate;
+import java.util.function.Function;
 import org.bukkit.*;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.event.*;
@@ -17,10 +19,19 @@ public final class WeatherService implements Listener, AutoCloseable {
     private boolean restoring;
     private final TrueSeasonsPlugin plugin;
     private final Path file;
+    private final Predicate<World> revealPending,terrainFinished;
+    private final Function<UUID,World> worlds;
     private final Map<UUID, Storm> storms = new HashMap<>();
     private final Map<UUID, String> lastStorm = new HashMap<>();
     public WeatherService(TrueSeasonsPlugin plugin) throws Exception {
+        this(plugin,world->false);
+    }
+    public WeatherService(TrueSeasonsPlugin plugin,Predicate<World> revealPending) throws Exception {
+        this(plugin,revealPending,world->plugin.engine().worldFinished(world),Bukkit::getWorld);
+    }
+    WeatherService(TrueSeasonsPlugin plugin,Predicate<World> revealPending,Predicate<World> terrainFinished,Function<UUID,World> worlds) throws Exception {
         this.plugin = plugin; file = plugin.getDataFolder().toPath().resolve("state/weather.yml");
+        this.revealPending=Objects.requireNonNull(revealPending);this.terrainFinished=Objects.requireNonNull(terrainFinished);this.worlds=Objects.requireNonNull(worlds);
         if (Files.exists(file)) {
             var data = new YamlConfiguration(); data.load(file.toFile());
             if (data.getInt("schema") != 1 && data.getInt("schema") != 2) throw new IOException("Unknown weather state schema");
@@ -39,7 +50,9 @@ public final class WeatherService implements Listener, AutoCloseable {
     @EventHandler(priority = EventPriority.MONITOR)
     public void migration(SeasonMigrationEvent event) {
         if (event.getPhase() == SeasonMigrationEvent.Phase.START && !event.isCleanup()) startWinterStorm(event.getWorld());
-        if (event.getPhase() == SeasonMigrationEvent.Phase.COMPLETE) restoreStorm(event.getWorld().getUID());
+        if (event.getPhase() == SeasonMigrationEvent.Phase.COMPLETE
+                &&(!active(event.getWorld())||plugin.currentSeason()!=Season.WINTER||!plugin.settings().winterStorm||!revealPending.test(event.getWorld())))
+            restoreStorm(event.getWorld().getUID());
     }
     @EventHandler(priority = EventPriority.MONITOR)
     public void season(SeasonChangeEvent event) {
@@ -76,7 +89,7 @@ public final class WeatherService implements Listener, AutoCloseable {
         } catch (IOException failure) { throw new UncheckedIOException("Cannot persist temporary storm restoration", failure); }
     }
     private void restoreStorm(UUID id) {
-        Storm storm = storms.get(id); World world = Bukkit.getWorld(id);
+        Storm storm = storms.get(id); World world = worlds.apply(id);
         if (storm == null || world == null) return;
         restoring=true;
         try {
@@ -94,17 +107,18 @@ public final class WeatherService implements Listener, AutoCloseable {
     }
     public void tick() {
         for (UUID id : new ArrayList<>(storms.keySet())) {
-            Storm storm = storms.get(id); World world = Bukkit.getWorld(id);
+            Storm storm = storms.get(id); World world = worlds.apply(id);
             if (world != null && (!active(world) || !storm.version.equals(plugin.version())
-                    || plugin.currentSeason() != Season.WINTER || !plugin.settings().winterStorm || plugin.engine().worldFinished(world))) restoreStorm(id);
+                    || plugin.currentSeason() != Season.WINTER || !plugin.settings().winterStorm || !migrationPending(world))) restoreStorm(id);
             else if(world!=null)holdStorm(world);
         }
     }
+    private boolean migrationPending(World world){return !terrainFinished.test(world)||revealPending.test(world);}
     /** Restore only the temporary winter-entry storm; native snowfall follows the whole season. */
     @Override public void close() {
         for (UUID id : new ArrayList<>(storms.keySet())) {
-            World world=Bukkit.getWorld(id);
-            boolean resume=world!=null&&active(world)&&plugin.currentSeason()==Season.WINTER&&!plugin.engine().worldFinished(world);
+            World world=worlds.apply(id);
+            boolean resume=world!=null&&active(world)&&plugin.currentSeason()==Season.WINTER&&!terrainFinished.test(world);
             restoreStorm(id);
             if(resume) { lastStorm.remove(id); save(); }
         }
@@ -112,7 +126,7 @@ public final class WeatherService implements Listener, AutoCloseable {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void keepMigrationStorm(WeatherChangeEvent event) {
         if(!restoring&&!event.toWeatherState()&&storms.containsKey(event.getWorld().getUID())&&active(event.getWorld())
-            &&plugin.currentSeason()==Season.WINTER&&!plugin.engine().worldFinished(event.getWorld()))event.setCancelled(true);
+            &&plugin.currentSeason()==Season.WINTER&&plugin.settings().winterStorm&&migrationPending(event.getWorld()))event.setCancelled(true);
     }
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void rain(WeatherChangeEvent event) {

@@ -177,7 +177,7 @@ public final class NativeSnowPacketTests {
         channel.writeOutbound(chunk(chunkData(source),0,0));channel.readOutbound();
         handler.setPresentation(false,Season.AUTUMN,policy);
         Object autumn=channel.readOutbound();int[] autumnIds=ids(autumn);
-        for(int i=0;i<64;i++)check(autumnIds[i]==original[i]+12,"Autumn tint routing cell "+i);
+        for(int i=0;i<64;i++)check(autumnIds[i]==original[i]+(original[i]==1?0:12),"Autumn tint routing preserves hot biomes "+i);
         check(Arrays.equals(autumnIds,nativeIds(autumn,21)),"Vanilla palette accepts the enlarged seasonal registry");
         handler.setPresentation(true,Season.WINTER,policy);
         Object winter=channel.readOutbound();int[] winterIds=ids(winter);

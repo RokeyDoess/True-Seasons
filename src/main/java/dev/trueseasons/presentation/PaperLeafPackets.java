@@ -5,6 +5,8 @@ import it.unimi.dsi.fastutil.ints.*;
 import it.unimi.dsi.fastutil.shorts.*;
 import java.lang.reflect.*;
 import java.util.*;
+import java.util.function.IntPredicate;
+import io.netty.buffer.*;
 
 /** Viewer-local originals and appearances. All terrain comes from outgoing packets. */
 public final class PaperLeafPackets {
@@ -28,11 +30,17 @@ public final class PaperLeafPackets {
         sectionConstructor=sectionPacket.getConstructor(section,Short2ObjectMap.class);
         for(int i=0;i<registry.states.length;i++)stateIds.put(registry.states[i],i);
     }
-    public record Context(long seed,int minY,int maxY,boolean autumn) {}
+    private static final IntPredicate ALL_BIOMES=id->true;
+    public record Context(long seed,int minY,int maxY,boolean autumn,IntPredicate autumnBiomeAllowed) {
+        public Context(long seed,int minY,int maxY,boolean autumn){this(seed,minY,maxY,autumn,ALL_BIOMES);}
+        public Context { Objects.requireNonNull(autumnBiomeAllowed); }
+    }
     private static final class Chunk {
         final int x,z,minY,maxY;
         final Int2IntOpenHashMap original=new Int2IntOpenHashMap(), shown=new Int2IntOpenHashMap();
         boolean complete=true;
+        int[][] biomes;
+        byte[][] rawBiomes;
         Chunk(int x,int z,int minY,int maxY){this.x=x;this.z=z;this.minY=minY;this.maxY=maxY;original.defaultReturnValue(-1);shown.defaultReturnValue(-1);}
         int key(int x,int y,int z){return ((y-minY)<<8)|((z&15)<<4)|(x&15);}
     }
@@ -49,7 +57,7 @@ public final class PaperLeafPackets {
                 if(context==null||clearAfterRestore)return;
                 if(chunks.isEmpty()){context=null;return;}
                 clearAfterRestore=true;
-                context=new Context(context.seed,context.minY,context.maxY,false);invalidate();chunks.keySet().forEach(this::queue);
+                context=new Context(context.seed,context.minY,context.maxY,false,context.autumnBiomeAllowed);invalidate();chunks.keySet().forEach(this::queue);
                 return;
             }
             clearAfterRestore=false;
@@ -68,9 +76,22 @@ public final class PaperLeafPackets {
             if(chunk==null||!chunk.complete)return AutumnTreeColors.Kind.UNKNOWN;
             int state=chunk.original.get(chunk.key(x,y,z));return state<0?AutumnTreeColors.Kind.OTHER:registry.kind(state);
         }
+        private boolean persistent(int x,int y,int z){
+            Chunk chunk=chunks.get(PaperBiomePackets.key(x>>4,z>>4));
+            if(chunk==null||y<chunk.minY||y>=chunk.maxY)return false;
+            int state=chunk.original.get(chunk.key(x,y,z));return state>=0&&registry.persistent[state];
+        }
         private int appearance(Chunk chunk,int key,int original){
             if(context==null||!context.autumn||!chunk.complete||!registry.kind(original).leaves())return original;
-            if(session==null)session=new AutumnTreeColors.Session(context.seed,this::sample);
+            int section=key>>12,cell=((key>>6)&48)|((key>>4)&12)|((key>>2)&3);
+            if(chunk.biomes==null||section>=chunk.biomes.length)return original;
+            if(chunk.biomes[section]==null){ByteBuf biome=Unpooled.wrappedBuffer(chunk.rawBiomes[section]);
+                try{chunk.biomes[section]=BiomeWireCodec.readBiomes(biome);}finally{biome.release();}}
+            if(!context.autumnBiomeAllowed.test(chunk.biomes[section][cell]))return original;
+            if(session==null)session=new AutumnTreeColors.Session(context.seed,new AutumnTreeColors.Sampler(){
+                public AutumnTreeColors.Kind kindAt(int x,int y,int z){return sample(x,y,z);}
+                public boolean persistentAt(int x,int y,int z){return persistent(x,y,z);}
+            });
             return registry.painted(original,session.appearanceAt((chunk.x<<4)|(key&15),chunk.minY+(key>>8),(chunk.z<<4)|((key>>4)&15)));
         }
         private void shown(Chunk chunk,int key,int original,int painted){if(original==painted)chunk.shown.remove(key);else chunk.shown.put(key,painted);}
@@ -80,7 +101,10 @@ public final class PaperLeafPackets {
             Object old=call(packet,"chunkData");byte[] bytes=(byte[])buffer.get(old);
             List<LeafWireCodec.Section> sections=LeafWireCodec.read(bytes,registry::relevant);
             Chunk source=new Chunk(x,z,context.minY,context.minY+sections.size()*16);
+            source.biomes=new int[sections.size()][];
+            source.rawBiomes=new byte[sections.size()][];
             for(int section=0;section<sections.size();section++){
+                source.rawBiomes[section]=sections.get(section).biomes();
                 int[] states=sections.get(section).states();if(states==null)continue;
                 for(int i=0;i<4096;i++)if(registry.relevant(states[i]))source.original.put((section<<12)|i,states[i]);
             }
@@ -92,6 +116,19 @@ public final class PaperLeafPackets {
                 int local=(section<<12)|index,painted=appearance(source,local,original);shown(source,local,original,painted);return painted;
             });
             return copyChunk(packet,old,mapped);
+        }
+        /** Consume original biome updates before any client-only alias rewriting. */
+        public void biomes(Object packet)throws ReflectiveOperationException{
+            if(context==null)return;
+            for(Object row:(List<?>)call(packet,"chunkBiomeData")){
+                Object pos=call(row,"pos");int x=(int)call(pos,"x"),z=(int)call(pos,"z");
+                Chunk chunk=chunks.get(PaperBiomePackets.key(x,z));if(chunk==null)continue;
+                ByteBuf bytes=Unpooled.wrappedBuffer((byte[])call(row,"buffer"));
+                try{List<byte[]> sections=new ArrayList<>();while(bytes.isReadable()){
+                        int start=bytes.readerIndex();BiomeWireCodec.readBiomes(bytes);byte[] section=new byte[bytes.readerIndex()-start];bytes.getBytes(start,section);sections.add(section);}
+                    if(sections.size()==chunk.biomes.length){chunk.rawBiomes=sections.toArray(byte[][]::new);chunk.biomes=new int[sections.size()][];queue(PaperBiomePackets.key(x,z));}
+                }finally{bytes.release();}
+            }
         }
         public Object update(Object packet) throws ReflectiveOperationException {
             if(context==null||(!blockPacket.isInstance(packet)&&!sectionPacket.isInstance(packet)))return packet;

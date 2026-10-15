@@ -9,12 +9,13 @@ import java.util.stream.Stream;
 final class NativeLeafRegistry {
     final Object[] states;
     final AutumnTreeColors.Kind[] kinds;
+    final boolean[] persistent;
     private final int[][] variants;
     NativeLeafRegistry() throws ReflectiveOperationException {
         Class<?> block=Class.forName("net.minecraft.world.level.block.Block");
         Object registry=block.getField("BLOCK_STATE_REGISTRY").get(null);
         Method size=registry.getClass().getMethod("size"), byId=registry.getClass().getMethod("byId",int.class), getId=registry.getClass().getMethod("getId",Object.class);
-        states=new Object[(int)size.invoke(registry)];kinds=new AutumnTreeColors.Kind[states.length];variants=new int[states.length][];
+        states=new Object[(int)size.invoke(registry)];kinds=new AutumnTreeColors.Kind[states.length];variants=new int[states.length][];persistent=new boolean[states.length];
         Class<?> holders=Class.forName("net.minecraft.world.level.block.Blocks");
         Object[] defaults=new Object[3];String[] names={"YELLOW_POPLAR_LEAVES","ORANGE_POPLAR_LEAVES","RED_POPLAR_LEAVES"};
         for(int i=0;i<3;i++){Object leaf=holders.getField(names[i]).get(null);defaults[i]=leaf.getClass().getMethod("defaultBlockState").invoke(leaf);}
@@ -29,6 +30,7 @@ final class NativeLeafRegistry {
             kinds[i]=kind;
             if(!kind.leaves())continue;
             List<?> values;try(Stream<?> stream=(Stream<?>)state.getClass().getMethod("getValues").invoke(state)){values=stream.toList();}
+            for(Object value:values){Object p=PaperBiomePackets.call(value,"property");if(PaperBiomePackets.call(p,"getName").equals("persistent"))persistent[i]=Boolean.TRUE.equals(PaperBiomePackets.call(value,"value"));}
             int[] colors=new int[3];
             for(int c=0;c<3;c++){
                 Object painted=defaults[c];

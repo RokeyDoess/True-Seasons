@@ -1,7 +1,8 @@
 # Probabilities adjust naturally starting rain/thunder. Saved biome climate is untouched.
 enabled: true
 winter-storm:
-  # Hold a snowstorm throughout the winter world migration, including pauses.
+  # Hold a snowstorm through winter migration and pending player snow reveals.
+  # Migration pauses do not end it. Previous weather returns afterward.
   # Restore the previous world weather once terrain migration completes.
   start-on-winter: true
 snowfall:

@@ -26,8 +26,8 @@ final class BlueMapSeasonalColors implements AutoCloseable {
     private final MethodHandle blockId, accessBlockState, keyValue, keyNamespace, blockBiome, biomeKey, colorSet;
     private final Map<Object, Object[]> originals = Collections.synchronizedMap(new WeakHashMap<>());
     private final Class<?> renderPassClass, worldClass, chunkClass;
-    private final Method chunkAt, chunkState, chunkGenerated, stateProperties;
-    private final MethodHandle chunkAtHandle, chunkStateHandle, chunkGeneratedHandle;
+    private final Method chunkAt, chunkState, chunkGenerated, stateProperties, chunkBiome;
+    private final MethodHandle chunkAtHandle, chunkStateHandle, chunkGeneratedHandle, chunkBiomeHandle;
     private final Constructor<?> stateConstructor;
     private final Class<?> paletteChunkClass;
     private final Field chunkSectionsField, sectionPaletteField;
@@ -60,9 +60,11 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         chunkClass = Class.forName("de.bluecolored.bluemap.core.world.Chunk", false, loader);
         chunkAt = worldClass.getMethod("getChunkAtBlock", int.class, int.class);
         chunkState = chunkClass.getMethod("getBlockState", int.class, int.class, int.class);
+        chunkBiome = chunkClass.getMethod("getBiome", int.class, int.class, int.class);
         chunkGenerated = chunkClass.getMethod("isGenerated");
         chunkAtHandle = MethodHandles.publicLookup().unreflect(chunkAt).asType(MethodType.methodType(Object.class,Object.class,int.class,int.class));
         chunkStateHandle = MethodHandles.publicLookup().unreflect(chunkState).asType(MethodType.methodType(Object.class,Object.class,int.class,int.class,int.class));
+        chunkBiomeHandle = MethodHandles.publicLookup().unreflect(chunkBiome).asType(MethodType.methodType(Object.class,Object.class,int.class,int.class,int.class));
         chunkGeneratedHandle = MethodHandles.publicLookup().unreflect(chunkGenerated).asType(MethodType.methodType(boolean.class,Object.class));
         stateProperties = block.getMethod("getProperties"); stateConstructor = block.getConstructor(key, Map.class);
         Class<?> checkedChunk = null; Field checkedSections = null, checkedPalette = null;
@@ -128,7 +130,7 @@ final class BlueMapSeasonalColors implements AutoCloseable {
                 }
                 SeasonalVisualState captured = palette.state;
                 if (captured != null && captured.active(world) && captured.season() == Season.AUTUMN && captured.resolver().autumnTrees()) {
-                    args = args.clone(); args[0] = new AutumnWorld(args[0], captured.seed(world)).proxy;
+                    args = args.clone(); args[0] = new AutumnWorld(args[0], captured).proxy;
                 }
             }
             try { return method.invoke(pass, args); }
@@ -146,18 +148,32 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         final Map<Object,Object> chunks = new IdentityHashMap<>();
         final Map<Object,Object[]> states = new IdentityHashMap<>();
         final Map<Object,AutumnTreeColors.Kind> kinds = new IdentityHashMap<>();
+        final Map<Object,Boolean> decorative = new IdentityHashMap<>();
         long lastCoordinate = Long.MIN_VALUE;
         Object lastChunk;
         final AutumnTreeColors.Session trees;
-        AutumnWorld(Object source, long seed) {
+        final SeasonalVisualState visualState;
+        final Map<String,Boolean> allowedBiomes=new HashMap<>();
+        AutumnWorld(Object source, SeasonalVisualState visualState) {
             this.source = source;
-            trees = new AutumnTreeColors.Session(seed, (x,y,z) -> {
+            this.visualState = visualState;
+            trees = new AutumnTreeColors.Session(visualState.seed(world), new AutumnTreeColors.Sampler(){
+              public AutumnTreeColors.Kind kindAt(int x,int y,int z){
                 try {
                     Object chunk = originalChunk(x,z);
                     if (!(boolean) chunkGeneratedHandle.invokeExact(chunk)) return AutumnTreeColors.Kind.UNKNOWN;
                     Object state = (Object) chunkStateHandle.invokeExact(chunk,x,y,z);
                     return kind(state);
                 } catch (Throwable failure) { throw new IllegalStateException("Cannot sample saved autumn tree", failure); }
+              }
+              public boolean persistentAt(int x,int y,int z){
+                try {Object chunk=originalChunk(x,z),state=(Object)chunkStateHandle.invokeExact(chunk,x,y,z);
+                    Boolean persistent=decorative.get(state);
+                    if(persistent==null){persistent="true".equals(((Map<?,?>)stateProperties.invoke(state)).get("persistent"));
+                        if(decorative.size()>=4096)decorative.clear();decorative.put(state,persistent);}
+                    return persistent;
+                }catch(Throwable failure){throw new IllegalStateException("Cannot sample decorative leaves",failure);}
+              }
             });
             proxy = Proxy.newProxyInstance(worldClass.getClassLoader(), new Class<?>[]{worldClass}, (object,method,args) -> {
                 if (method.getName().equals("getChunkAtBlock")) return wrapChunk(originalChunk((int)args[0],(int)args[1]));
@@ -195,6 +211,9 @@ final class BlueMapSeasonalColors implements AutoCloseable {
                 if (!method.getName().equals("getBlockState")) return call(method,chunk,args);
                 Object result = (Object) chunkStateHandle.invokeExact(chunk,(int)args[0],(int)args[1],(int)args[2]);
                 if (!kind(result).leaves()) return result;
+                Object biome=(Object)chunkBiomeHandle.invokeExact(chunk,(int)args[0],(int)args[1],(int)args[2]);
+                String biomeName=((Object)biomeKey.invokeExact(biome)).toString();
+                if(!allowedBiomes.computeIfAbsent(biomeName,name->visualState.resolver().applies(Season.AUTUMN,name)))return result;
                 var appearance = trees.appearanceAt((int)args[0],(int)args[1],(int)args[2]);
                 if (appearance == AutumnTreeColors.Appearance.ORIGINAL) return result;
                 Object[] painted = states.get(result);

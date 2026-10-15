@@ -9,6 +9,7 @@ import java.util.function.Supplier;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.BooleanSupplier;
+import java.util.function.BiConsumer;
 import org.bukkit.*;
 import org.bukkit.block.*;
 import org.bukkit.block.data.type.Snow;
@@ -27,6 +28,7 @@ public final class SeasonalSnowService implements Listener {
     private final Supplier<Settings> settings;
     private final Supplier<Boolean> winter;
     private final WinterGroundCover groundCover;
+    private BiConsumer<Chunk, SnowColumns> ownershipObserver;
     // Main-thread-only, private default data: canPlace reads it; no caller can mutate it.
     private BlockData replenishmentSnowData;
     public SeasonalSnowService(Plugin plugin, Supplier<Settings> settings) {
@@ -77,10 +79,24 @@ public final class SeasonalSnowService implements Listener {
                 throw new IOException("Snow height outside world bounds");
         return columns;
     }
+    /** Main-thread-only ownership read; never inspects or loads terrain blocks. */
+    public SnowColumns observeOwnership(Chunk chunk) throws IOException { return read(chunk); }
+    /** Main-thread-only presentation observer. Null detaches it without changing durable ownership. */
+    public void setOwnershipObserver(BiConsumer<Chunk, SnowColumns> observer) { ownershipObserver = observer; }
+    void removeOwnershipObserver(BiConsumer<Chunk, SnowColumns> observer) {
+        if (ownershipObserver == observer) ownershipObserver = null;
+    }
     private void write(Chunk chunk, SnowColumns columns) {
         var pdc = chunk.getPersistentDataContainer();
         if (columns.isEmpty()) pdc.remove(ownedKey);
         else pdc.set(ownedKey, PersistentDataType.BYTE_ARRAY, columns.encode());
+        // Publish before physical placements can produce outgoing block packets.
+        // Presentation failure must never interrupt the durable world edit it observes.
+        if (ownershipObserver != null) try { ownershipObserver.accept(chunk, columns); }
+        catch (RuntimeException failure) {
+            System.getLogger(SeasonalSnowService.class.getName()).log(System.Logger.Level.WARNING,
+                "Could not refresh seasonal snow presentation ownership", failure);
+        }
     }
     private boolean expected(Block block) { return block.getBlockData() instanceof Snow snow && snow.getLayers() == 1; }
 

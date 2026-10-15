@@ -7,7 +7,6 @@ import java.io.IOException;
 import java.util.*;
 import java.util.function.*;
 import org.bukkit.*;
-import org.bukkit.entity.Player;
 import org.bukkit.event.*;
 import org.bukkit.event.block.BlockFormEvent;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -61,37 +60,13 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
                 && !withinCoverage((block.getX() & 15) | ((block.getZ() & 15) << 4),
                     chunk.getX(), chunk.getZ(), current, coverage.getAsInt())) event.setCancelled(true);
     }
-    private boolean nearby(Chunk chunk) {
-        int radius = settings.get().playerRadius;
-        Location scratch = new Location(null, 0, 0, 0);
-        for (Player player : chunk.getWorld().getPlayers()) {
-            Location at = player.getLocation(scratch);
-            if (Math.abs((long) chunk.getX() - (at.getBlockX() >> 4)) <= radius
-                    && Math.abs((long) chunk.getZ() - (at.getBlockZ() >> 4)) <= radius) return true;
-        }
-        return false;
-    }
-    private boolean nearbySnapshot(Chunk chunk, Map<World, long[]> centers) {
-        long[] positions = centers.computeIfAbsent(chunk.getWorld(), world -> {
-            List<Player> players = world.getPlayers(); long[] result = new long[players.size()];
-            Location scratch = new Location(null, 0, 0, 0);
-            for (int i = 0; i < players.size(); i++) {
-                Location at = players.get(i).getLocation(scratch);
-                result[i] = ((long) (at.getBlockX() >> 4) << 32) | ((at.getBlockZ() >> 4) & 0xffffffffL);
-            }
-            return result;
-        });
-        int radius = settings.get().playerRadius;
-        for (long at : positions) if (Math.abs((long) chunk.getX() - (int) (at >> 32)) <= radius
-            && Math.abs((long) chunk.getZ() - (int) at) <= radius) return true;
-        return false;
-    }
+    private boolean visible(Chunk chunk) { return !chunk.getPlayersSeeingChunk().isEmpty(); }
     private boolean activeChunk(Chunk chunk) {
         return !closed && chunk.isLoaded() && active.test(chunk.getWorld()) && chunk.getWorld().hasStorm()
             && !snow.isComplete(chunk, version.get());
     }
-    private boolean ready(Chunk chunk) {
-        return activeChunk(chunk) && nearby(chunk);
+    boolean ready(Chunk chunk) {
+        return activeChunk(chunk) && visible(chunk);
     }
     public void tick() throws IOException {
         if (closed) return;
@@ -104,13 +79,12 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
             loaded = List.copyOf(next);
         }
         int attempted = 0; Set<Chunk> sampled = new HashSet<>();
-        Map<World, long[]> playerCenters = new HashMap<>();
         for (int inspected = 0; !loaded.isEmpty() && inspected < INSPECTIONS_PER_TICK
                 && attempted < CHUNKS_PER_TICK && System.nanoTime() < deadline; inspected++) {
             Chunk chunk = loaded.get(Math.floorMod(cursor++, loaded.size()));
-            // Inspecting distant loaded terrain shares one player-position snapshot per world.
-            // The actual write path still verifies live positions after reentrant formation events.
-            if (!sampled.add(chunk) || !activeChunk(chunk) || !nearbySnapshot(chunk, playerCenters)) continue;
+            // Actual sent chunks respect each viewer's distance without loading any terrain.
+            // The write path rechecks viewers after reentrant formation events.
+            if (!sampled.add(chunk) || !activeChunk(chunk) || !visible(chunk)) continue;
             String current = version.get(); int shared = coverage.getAsInt();
             if (shared <= 0) continue;
             int step = Math.min(COLUMNS_PER_CHUNK, settings.get().snowStepColumns);
@@ -121,7 +95,7 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
             accumulate(chunk, columns, deadline); attempted++;
         }
     }
-    /** Deterministic live verification path keeps every activity, location, grace and coverage gate. */
+    /** Deterministic live verification path keeps every activity, visibility, grace and coverage gate. */
     public SeasonalSnowService.Result accumulate(Chunk chunk, int[] columns) throws IOException {
         return accumulate(chunk, columns, Long.MAX_VALUE);
     }

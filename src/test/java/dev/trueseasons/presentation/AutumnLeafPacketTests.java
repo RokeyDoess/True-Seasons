@@ -27,7 +27,7 @@ public final class AutumnLeafPacketTests {
         nativeIds=type("net.minecraft.world.level.block.Block").getField("BLOCK_STATE_REGISTRY").get(null);
         air=defaultId("AIR");stone=defaultId("STONE");birch=defaultId("BIRCH_LEAVES");
         birchLog=defaultId("BIRCH_LOG");spruce=defaultId("SPRUCE_LEAVES");cherry=defaultId("CHERRY_LEAVES");oakLog=defaultId("OAK_LOG");
-        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); batches(); verticalAndMetadata(); compositeHandler();
+        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler();
         System.out.println("Autumn leaf packet tests passed: "+assertions+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -129,6 +129,13 @@ public final class AutumnLeafPacketTests {
         check(client[index(0,6,8)]==birch,"neighbor unload restores unresolved border leaves");
         view.chunk(chunk(chunkData(sectionWire(west,4)),0,0));drain(view,client,1,0);
         check(client[index(0,6,8)]==colored,"neighbor reload retains stable tree color");
+        int oak=defaultId("OAK_LEAVES");
+        west[index(15,6,8)]=oak;west[index(14,6,8)]=birchLog;
+        view.chunk(chunk(chunkData(sectionWire(west,4)),0,0));drain(view,client,1,0);
+        check(client[index(0,6,8)]!=birch,"mixed overlapping crown across chunks repaints without client force update");
+        Object repeated=view.update(single(16,6,8,birch));
+        check(id(call(repeated,"getBlockState"))==client[index(0,6,8)],"unchanged original leaf update retains existing seasonal appearance");
+        drain(view,client,1,0);check(client[index(0,6,8)]!=birch,"unchanged update does not discard remembered painted state");
         view.context(new PaperLeafPackets.Context(124,0,16,false));
         check(view.retainedStates()==0,"world seed change clears originals from prior world");
     }
@@ -155,9 +162,33 @@ public final class AutumnLeafPacketTests {
         check(view.update(unseen)==unseen,"uncached updates forwarded unchanged without introducing cache");
         Map<Integer,Integer> removedLogs=new LinkedHashMap<>();for(int y=0;y<=6;y++)removedLogs.put(index(8,y,8),air);
         Object removed=view.update(batch(0,0,0,removedLogs));apply(client,List.of(removed),0,0);drain(view,client,0,0);
-        check(client[index(9,6,8)]==birch,"cutting trunk restores unresolved canopy to original leaf appearance");
+        check(client[index(9,6,8)]!=birch,"cutting trunk retains seasonal appearance for surviving leaves");
         view.context(new PaperLeafPackets.Context(7,0,16,false));drain(view,client,0,0);
         check(client[index(9,6,8)]==birch,"batch original birch restored");
+    }
+    private static void decorativeAndBiomes()throws Exception{
+        int[] source=filled(air);int placed=leafVariant(birch,7,true,false);
+        source[index(1,5,1)]=placed;source[index(5,5,1)]=placed;
+        var view=bridge.view();view.context(new PaperLeafPackets.Context(99,0,16,true,id->id==1));
+        Object packet=view.chunk(chunk(chunkData(sectionWire(source,4)),0,0));
+        int[] client=nativeDecode(LeafWireCodec.read(buffer(call(packet,"chunkData")),id->true).getFirst().originalBlocks());
+        check(client[index(1,5,1)]!=placed,"placed birch colors without trunk in eligible biome cell");
+        check(client[index(5,5,1)]==placed,"hot biome leaf remains original in adjacent quart cell");
+        check(properties(registry.states[client[index(1,5,1)]]).equals(properties(registry.states[placed])),"decorative leaf property preservation");
+        Object update=view.update(single(5,5,1,placed));check(id(call(update,"getBlockState"))==placed,"single update respects cached excluded biome");
+        int[] allAllowed=new int[64];Arrays.fill(allAllowed,1);ByteBuf bytes=Unpooled.buffer();
+        try{
+            BiomeWireCodec.writeBiomes(bytes,allAllowed,4,false,4);
+            Object row=type("net.minecraft.network.protocol.game.ClientboundChunksBiomesPacket$ChunkBiomeData")
+                .getConstructor(type("net.minecraft.world.level.ChunkPos"),byte[].class)
+                .newInstance(type("net.minecraft.world.level.ChunkPos").getConstructor(int.class,int.class).newInstance(0,0),bytes(bytes));
+            Object biomes=type("net.minecraft.network.protocol.game.ClientboundChunksBiomesPacket").getConstructor(List.class).newInstance(List.of(row));
+            view.biomes(biomes);drain(view,client,0,0);
+            check(client[index(5,5,1)]==client[index(1,5,1)],"biome-only update repairs already sent decorative leaves");
+        }finally{bytes.release();}
+        Object broken=view.update(single(1,5,1,air));check(id(call(broken,"getBlockState"))==air,"breaking decorative leaf forwards air");client[index(1,5,1)]=air;
+        view.context(new PaperLeafPackets.Context(99,0,16,false));drain(view,client,0,0);
+        check(client[index(1,5,1)]==air&&client[index(5,5,1)]==placed,"decorative cleanup preserves edit and exact original");
     }
     private static void verticalAndMetadata() throws Exception {
         int[] lower=filled(air),upper=filled(air);

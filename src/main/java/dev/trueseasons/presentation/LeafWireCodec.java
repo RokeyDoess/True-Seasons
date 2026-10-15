@@ -39,16 +39,23 @@ public final class LeafWireCodec {
         }finally{in.release();}
     }
     public static byte[] write(List<Section> sections,int registrySize,Mapper mapper){
+        return write(sections,registrySize,mapper,null);
+    }
+    /** Count-aware variant for presentation that changes solid blocks into air. */
+    public static byte[] write(List<Section> sections,int registrySize,Mapper mapper,IntPredicate isAir){
         ByteBuf out=Unpooled.buffer();
         try{for(int section=0;section<sections.size();section++){
-            Section source=sections.get(section);out.writeShort(source.blocks).writeShort(source.fluids);
+            Section source=sections.get(section);int header=out.writerIndex();out.writeShort(source.blocks).writeShort(source.fluids);
             if(source.states==null)out.writeBytes(source.originalBlocks);
             else{
-                int[] states=source.states.clone();boolean changed=false;
+                int[] states=source.states.clone();boolean changed=false;int count=source.blocks;
                 for(int i=0;i<4096;i++){int mapped=mapper.map(section,i,states[i]);
                     if(mapped<0||mapped>=registrySize)throw new IllegalArgumentException("Block outside native registry");
+                    if(isAir!=null&&mapped!=states[i])count+=(isAir.test(states[i])?1:0)-(isAir.test(mapped)?1:0);
                     changed|=mapped!=states[i];states[i]=mapped;
                 }
+                if(count<0||count>4096)throw new IllegalArgumentException("Invalid mapped section block count");
+                out.setShort(header,count);
                 if(changed)writePalette(out,states,registrySize);else out.writeBytes(source.originalBlocks);
             }
             out.writeBytes(source.biomes);

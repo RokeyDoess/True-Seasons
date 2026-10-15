@@ -9,7 +9,7 @@ Seasonal colors and reversible winter snow for Paper servers.
 
 True Seasons brings Minecraft's native snowfall to winter and adds snow to exposed terrain, roofs and leaf canopies. Exposed grass, flowers and leaf litter disappear beneath the snow and return when winter ends.
 
-**Latest prerelease: 0.1.10.** Seasonal colors, winter snow and weather are available.
+**Development version: 0.1.11.** Published builds are available from Releases.
 
 ## Features
 
@@ -23,15 +23,15 @@ True Seasons brings Minecraft's native snowfall to winter and adds snow to expos
 
 Grass, ferns, flowers, bushes, mushrooms and leaf litter are saved before removal. Tall plants keep both halves and their properties. Saplings, leaves, crops and sheltered plants stay in place. Snow requires a surface that supports a normal Minecraft snow layer.
 
-Deserts, badlands, savannas, jungles and other hot biomes skip winter snow and snowfall by default. Cold biomes keep their normal colors during summer. Saved biomes and natural snow remain unchanged.
+Deserts, badlands, savannas, jungles and other hot biomes skip winter snow, snowfall and autumn colors by default. Cold biomes keep their normal colors during summer. Saved biomes and natural snow remain unchanged.
 
 ## Autumn trees
 
 Autumn uses Minecraft's yellow, orange and red poplar leaf appearances. Each tree's color remains stable across reloads. Oak, birch, jungle, acacia, dark oak and mangrove trees participate; cherry always uses red. Spruce, existing poplar, pale oak and azalea retain their normal appearance. Original leaf types, decay and drops stay unchanged. No resource pack is required.
 
-Colors follow the nearest matching trunk. Touching crowns can share a boundary, and connected logs are treated as one tree. Leaves without a usable trunk, unusually large structures or unavailable neighboring terrain retain their original appearance. Client colors finish updating as nearby chunks arrive. There is no gradual autumn color transition yet.
+Natural tree colors follow the nearest matching trunk, including through overlapping crowns. Connected logs are treated as one tree. Client colors finish updating as nearby chunks arrive. Unavailable terrain and unusually large structures can retain their original appearance. There is no gradual autumn color transition yet.
 
-Some overlapping oak and birch crowns can retain green leaves until a client refresh. Decorative leaves without a trunk may also keep their usual appearance. Improvements are planned.
+Player-placed leaves and hedges change color too, without needing a trunk. Each eligible decorative leaf type has one stable color per world, keeping long hedges consistent. Cherry petals on the ground remain pink; Minecraft has no matching red version to display without a resource pack.
 
 Grass colors still follow the biome palettes in `visuals.yml`. Set `autumn-trees.enabled: false` there to keep ordinary leaf appearances.
 
@@ -85,19 +85,25 @@ Each generated file explains its options.
 | `integrations.yml` | BlueMap updates. |
 | `visuals.yml` | Seasonal grass and leaf colors. |
 
-Snow covers exposed, supporting surfaces by default. A surface whitelist is optional. Climate exclusions match parts of biome names and can be changed in `config.yml`. Additional winter exclusions belong in `snow.yml`. Player-priority options do not change background migration order.
+Snow covers exposed, supporting surfaces by default. A surface whitelist is optional. Climate exclusions match parts of biome names and can be changed in `config.yml`. Additional winter exclusions belong in `snow.yml`.
 
-Nearby loaded chunks accumulate real snow up to the shared winter transition percentage. The background pass still completes regions in order. `migration.player-radius-chunks` controls only the local storm radius; `transition.enabled` and its step settings in `snow.yml` control local accumulation.
+During winter's opening storm, snow appears gradually across the chunks players can see, following the shared winter transition percentage. The background pass still completes regions in order. Finished regions reveal their snow gradually to players, while visible unfinished terrain accumulates real snow within the same coverage limit. Exposed plants disappear when the physical transition reaches them.
+
+`transition.enabled` and its step settings in `snow.yml` control this transition. Disabling it shows snow as regions finish. The old `migration.player-radius-chunks` setting no longer limits the storm. Natural snow, thicker layers and player replacements keep their real appearance.
+
+Grass, podzol and mycelium sides follow the same reveal, so hidden snow does not leave white ground textures behind. Saved block properties stay unchanged.
 
 `ground-cover.enabled` controls temporary plant removal. Disabling it restores saved plants during the next terrain update. Plants return only where their original space and support remain suitable. Breaking winter snow, changing its support or placing a replacement can discard the saved plant at that spot. Unresolved conflicts are reported as deferred work and need attention before cleanup can finish.
 
 Player-broken snow has a **60-second** refill delay by default. Change `replenishment.player-break-cooldown-seconds`; `0` disables the delay. Afterward, snow may return during winter rain in loaded, completed terrain when light and support allow it. Existing layers do not grow taller.
 
-The introductory storm lasts until terrain updates finish, including pauses and restarts. Previous weather returns afterward. Throughout winter, rain and thunderstorms appear as snowfall in eligible biomes; clear weather stays clear.
+The introductory storm lasts until terrain updates and players' pending snow reveals finish, including migration pauses and restarts. Previous weather returns afterward. Throughout winter, rain and thunderstorms appear as snowfall in eligible biomes; clear weather stays clear.
 
 ## BlueMap
 
 True Seasons requests updates after a region's terrain changes finish and save. Nearby changes are combined to reduce renders, so the map may trail the world. Updates that change no blocks do not request a render.
+
+BlueMap shows the actual saved snow in completed regions. The gradual reveal players see does not trigger additional map renders.
 
 **WORLD COMPLETE — MAP UPDATES PENDING** means terrain work has finished and BlueMap is catching up. Keep autosaving enabled and allow BlueMap to render. Frozen or stopped maps keep their updates pending.
 

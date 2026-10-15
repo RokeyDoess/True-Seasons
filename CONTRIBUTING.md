@@ -25,3 +25,7 @@ Use Java 25 and Gradle 9.1.0 or later. Run `gradle check jar` to compile the plu
 These checks do not start a Minecraft server or run the native packet and live-world probes. Changes to packet handling, temporary terrain edits or BlueMap rendering need separate testing on a backed-up test world.
 
 Contributions use the project's [GPL-3.0 license](LICENSE).
+
+## Releases
+
+Keep release notes concise and describe changes for server owners. Verify the README release badge shows the published version and links to its release. Include current limitations and leave local test worlds, profiles and analysis out of the release.

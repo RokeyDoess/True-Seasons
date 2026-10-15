@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.1.11"
+version = "0.2.0"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -37,11 +37,17 @@ listOf(
     "climateTest" to "dev.trueseasons.climate.SeasonClimateTests",
     "groundCoverTest" to "dev.trueseasons.snow.WinterGroundCoverTests",
     "snowOwnershipSnapshotsTest" to "dev.trueseasons.snow.SnowOwnershipSnapshotsTests",
+    "snowPreviewPlanningTest" to "dev.trueseasons.snow.SnowPreviewPlanningTests",
+    "snowmeltTest" to "dev.trueseasons.snow.SnowmeltTests",
+    "previewSchedulingTest" to "dev.trueseasons.snow.PreviewSchedulingTests",
+    "snowPresentationBudgetTest" to "dev.trueseasons.presentation.SnowPresentationBudgetTests",
     "winterStormRevealTest" to "dev.trueseasons.weather.WinterStormRevealTests",
     "localWinterSnowTest" to "dev.trueseasons.snow.LocalWinterSnowTests",
     "generatedSnapshotTest" to "dev.trueseasons.migration.GeneratedChunkSnapshotTests",
     "winterCoverageTest" to "dev.trueseasons.migration.WinterCoveragePolicyTests",
     "commandPresentationTest" to "dev.trueseasons.command.CommandPresentationTests",
+    "seasonAnnouncementTest" to "dev.trueseasons.notification.SeasonAnnouncementTests",
+    "migrationProgressNotificationTest" to "dev.trueseasons.notification.MigrationProgressNotificationTests",
     "snowReplenishmentTest" to "dev.trueseasons.snow.SnowReplenishmentTests",
     "snowBreakCooldownTest" to "dev.trueseasons.snow.SnowBreakCooldownTests",
     "snowCompletionTest" to "dev.trueseasons.SnowCompletionTests",

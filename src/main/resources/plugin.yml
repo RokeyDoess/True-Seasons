@@ -1,5 +1,5 @@
 name: TrueSeasons
-version: 0.1.11
+version: 0.2.0
 main: dev.trueseasons.TrueSeasonsPlugin
 api-version: '26.3'
 description: Calendar seasons with seasonal colors and reversible winter snow.

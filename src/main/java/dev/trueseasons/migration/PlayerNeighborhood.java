@@ -16,8 +16,6 @@ public final class PlayerNeighborhood {
         return List.copyOf(result);
     }
     public static int columnAt(int cursor, int chunkX, int chunkZ, String version) {
-        // Odd multiplication permutes all 256 columns. Salt avoids visible rows.
-        if (cursor < 0 || cursor >= 256) throw new IllegalArgumentException("Column cursor out of range");
-        return (cursor * 149 + Objects.hash(chunkX, chunkZ, version)) & 255;
+        return new dev.trueseasons.snow.SnowColumnOrder(chunkX, chunkZ, version).column(cursor);
     }
 }

@@ -9,13 +9,27 @@ surface-materials: [GRASS_BLOCK, DIRT, COARSE_DIRT, PODZOL, MYCELIUM, ROOTED_DIR
 excluded-biome-fragments: []
 
 transition:
-  # Visible chunks accumulate snow up to the shared winter percentage.
+  # Visible unfinished chunks preview snow up to the shared winter percentage.
   # Finished regions reveal their snow gradually to players at that percentage.
   # Snowy grass, podzol and mycelium sides follow that reveal without world edits.
   # BlueMap shows saved snow; background migration stays region-by-region.
   enabled: true
+  # Legacy physical accumulation settings; preview limits are under presentation.
   columns-per-step: 8
   step-ticks: 5
+snowmelt:
+  # Visible snow decreases with terrain restoration progress. Region work starts
+  # immediately; previews retain remaining snow over already-restored terrain.
+  enabled: true
+presentation:
+  # Shared by all players for extra snow preview/reveal and melt updates.
+  # Lower limits save work but visible snow takes longer to catch up. Raise with care.
+  # These do not change terrain migration, BlueMap, or normal chunk packets.
+  # Per-player limits still apply. Changes take effect on /ts reload.
+  # 1..1024 chunk visits per server tick.
+  max-chunks-per-tick: 64
+  # 1..131072 changed block states per server tick.
+  max-block-updates-per-tick: 8192
 ground-cover:
   # Temporarily remove exposed grass, flowers and leaf litter during winter.
   # Exact plants are restored on leaving winter if the destination/support is unchanged.

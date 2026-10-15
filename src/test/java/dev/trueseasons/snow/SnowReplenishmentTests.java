@@ -73,6 +73,7 @@ public final class SnowReplenishmentTests {
             return columns.computeIfAbsent(id, ignored -> {
                 Column c = new Column();
                 c.ground = proxy(Block.class, (p, m, a) -> switch (m.getName()) {
+                    case "getBlockData" -> proxy(BlockData.class,(data,method,values)->method.getName().equals("getMaterial")?c.support:identity(data,method.getName(),values));
                     case "getType" -> c.support; case "getY" -> c.height; case "getRelative" -> { check(a[0] == BlockFace.UP, "Only the exposed surface above is sampled"); yield c.above; }
                     case "getLightFromSky" -> (byte) c.sky; case "getLightFromBlocks" -> (byte) c.light;
                     default -> identity(p, m.getName(), a);

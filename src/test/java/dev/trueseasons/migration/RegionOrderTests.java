@@ -11,7 +11,7 @@ public final class RegionOrderTests {
     }
     public static void main(String[] args) {
         var job = new ChunkMigrationEngine.Job(null); job.scanned = true;
-        ChunkPos a = new ChunkPos(-32,-32), b = new ChunkPos(-1,-1), other = new ChunkPos(0,-32);
+        ChunkPos a = new ChunkPos(0,0), b = new ChunkPos(31,31), other = new ChunkPos(32,0);
         job.observeIndexed(other,true); job.observeIndexed(b,true); job.observeIndexed(a,true);
         check(poll(job).equals(a), "Region and slot order are independent of input discovery order");
         job.flight.add(a);
@@ -23,7 +23,7 @@ public final class RegionOrderTests {
         job.flight.remove(a); job.failures.put(a, 1L);
         check(poll(job) == null, "Deferred region work blocks advancement");
         job.failures.clear();
-        check(poll(job).equals(other), "Completed region releases the next numeric region");
+        check(poll(job).equals(other), "Completed region releases the next spiral region");
         ChunkPos discoveredEarlier = new ChunkPos(-64,-64);
         job.observeIndexed(discoveredEarlier,true);
         check(poll(job) == null, "New discovery cannot interrupt the active region");
@@ -31,6 +31,15 @@ public final class RegionOrderTests {
         check(poll(job).equals(discoveredEarlier), "Deferred discovery joins only after the active region finishes");
         job.markComplete(discoveredEarlier);
         check(job.finished(), "Region scheduling preserves total completion");
+        var spiral=new RegionWorkQueue();
+        int[][] expected={{0,0},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1},{1,-1},{2,-1},{2,0},{2,1},{2,2},{1,2},{0,2},{-1,2},{-2,2},
+            {-2,1},{-2,0},{-2,-1},{-2,-2},{-1,-2},{0,-2},{1,-2},{2,-2}};
+        for(int i=expected.length-1;i>=0;i--)spiral.add(new ChunkPos(expected[i][0]*32,expected[i][1]*32));
+        for(int[] region:expected)check(spiral.pollFirst(ignored->true).equals(new ChunkPos(region[0]*32,region[1]*32)),"Complete rings follow a square spiral independent of discovery order");
+        var sparse=new RegionWorkQueue();sparse.add(new ChunkPos(Integer.MIN_VALUE,Integer.MIN_VALUE));sparse.add(new ChunkPos(Integer.MAX_VALUE,Integer.MAX_VALUE));sparse.add(new ChunkPos(0,0));
+        check(sparse.pollFirst(ignored->true).equals(new ChunkPos(0,0)),"Sparse distant regions require no traversal of empty rings");
+        check(sparse.pollFirst(ignored->true).equals(new ChunkPos(Integer.MAX_VALUE,Integer.MAX_VALUE)),"Extreme negative coordinates do not overflow ring ordering");
+        check(sparse.pollFirst(ignored->true).equals(new ChunkPos(Integer.MIN_VALUE,Integer.MIN_VALUE)),"Extreme regions remain distinct");
 
         // 50x a 4,096-chunk test world: no world-size search for each chunk selection.
         job = new ChunkMigrationEngine.Job(null); job.scanned = true;

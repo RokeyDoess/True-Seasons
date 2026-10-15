@@ -2,16 +2,29 @@ package dev.trueseasons.command;
 
 import dev.trueseasons.TrueSeasonsPlugin;
 import dev.trueseasons.api.Season;
+import dev.trueseasons.notification.MigrationProgressNotifications;
 import java.util.*;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.command.*;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
+import org.bukkit.event.*;
+import org.bukkit.event.player.PlayerQuitEvent;
 
-public final class SeasonsCommand implements CommandExecutor, TabCompleter {
+public final class SeasonsCommand implements CommandExecutor, TabCompleter, Listener {
     private final TrueSeasonsPlugin plugin;
     private final Map<String, Long> confirmations = new HashMap<>();
-    public SeasonsCommand(TrueSeasonsPlugin plugin) { this.plugin = plugin; }
+    private final MigrationProgressNotifications notifications;
+    public SeasonsCommand(TrueSeasonsPlugin plugin) {
+        this.plugin = plugin;
+        notifications=new MigrationProgressNotifications(Bukkit::getPlayer,()->new CommandOutput(plugin).progressUpdate(),
+            ()->plugin.engine().worldEditsComplete()&&plugin.integrations().pending()==0);
+    }
+    public void tick(int tick){notifications.tick(tick);}
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void quit(PlayerQuitEvent event){notifications.remove(event.getPlayer().getUniqueId());}
     private static Component label(String text) { return Component.text(text, NamedTextColor.GRAY); }
     private static Component value(Object text, NamedTextColor color) { return Component.text(String.valueOf(text), color); }
     private static NamedTextColor seasonColor(Season season) {
@@ -43,10 +56,9 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter {
                 case "info" -> sender.sendMessage(value("True Seasons ", NamedTextColor.GOLD)
                         .append(value(plugin.getPluginMeta().getVersion(), NamedTextColor.AQUA)).append(label(" | "))
                         .append(value(plugin.currentSeason(), seasonColor(plugin.currentSeason()))).append(label(" | "))
-                        .append(value(plugin.version(), NamedTextColor.GRAY)).append(label(" | "))
                         .append(plugin.state().override == null ? label("Calendar: ").append(value(plugin.settings().calendar.zone(), NamedTextColor.AQUA))
                                 : value("Manual override", NamedTextColor.YELLOW)));
-                case "status" -> status(sender);
+                case "status" -> { if(args.length==1)new CommandOutput(plugin).overview(sender);else usage(sender,"/ts status"); }
                 case "reload" -> { plugin.reloadSettings(); sender.sendMessage(value("Configuration validated and reloaded.", NamedTextColor.GREEN)); }
                 case "season" -> {
                     if (args.length == 2 && args[1].equalsIgnoreCase("sync")) {
@@ -58,15 +70,25 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter {
                     } else usage(sender, "/trueseasons season set <spring|summer|autumn|winter> or season sync");
                 }
                 case "migration" -> {
-                    if (args.length == 2 && List.of("pause", "resume").contains(args[1].toLowerCase(Locale.ROOT))) {
+                    if(args.length==2&&args[1].equalsIgnoreCase("notify")){
+                        if(!(sender instanceof Player player))sender.sendMessage(value("Live migration updates are available to players in game.",NamedTextColor.YELLOW));
+                        else {
+                            boolean enabled=notifications.toggle(player.getUniqueId(),Bukkit.getCurrentTick());
+                            sender.sendMessage(value("Migration updates ",NamedTextColor.GOLD)
+                                .append(value(enabled?"enabled":"disabled",enabled?NamedTextColor.GREEN:NamedTextColor.YELLOW))
+                                .append(label(enabled?" · every 5 seconds; run /ts migration notify to stop.":".")));
+                        }
+                    } else if (args.length == 2 && List.of("pause", "resume").contains(args[1].toLowerCase(Locale.ROOT))) {
                         plugin.state().paused = args[1].equalsIgnoreCase("pause"); plugin.persist();
                         sender.sendMessage(value("Migration status", NamedTextColor.GOLD).decorate(TextDecoration.BOLD)
                                 .append(label(" | ")).append(value(plugin.state().paused ? "paused" : "resumed",
                                 plugin.state().paused ? NamedTextColor.YELLOW : NamedTextColor.GREEN)));
-                    } else status(sender);
+                    } else if(args.length==1||args.length==2&&List.of("status","details").contains(args[1].toLowerCase(Locale.ROOT)))
+                        new CommandOutput(plugin).migration(sender,args.length==2&&args[1].equalsIgnoreCase("details"),false);
+                    else usage(sender,"/ts migration [status|details|notify|pause|resume]");
                 }
                 case "cleanup", "uninstall" -> {
-                    if (plugin.state().cleanup || args.length == 2 && args[1].equalsIgnoreCase("status")) { status(sender); break; }
+                    if (plugin.state().cleanup || args.length == 2 && args[1].equalsIgnoreCase("status")) { new CommandOutput(plugin).migration(sender,false,true); break; }
                     String key = sender instanceof org.bukkit.entity.Player player ? player.getUniqueId().toString() : sender.getName();
                     Long deadline = confirmations.remove(key);
                     if (args.length == 2 && args[1].equalsIgnoreCase("confirm") && deadline != null && deadline >= System.currentTimeMillis()) {
@@ -84,61 +106,11 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter {
                 .append(value(Objects.toString(failure.getMessage(), failure.getClass().getSimpleName()), NamedTextColor.RED))); }
         return true;
     }
-    private void status(CommandSender sender) {
-        int pending = plugin.integrations().pending();
-        boolean finished = plugin.engine().worldEditsComplete();
-        boolean indexing = plugin.engine().jobs().stream().anyMatch(job -> job.indexingSavedProgress());
-        String phase = plugin.state().cleanup ? "CLEANUP" : plugin.state().clean ? "RESTORED"
-                : indexing ? "INDEXING SAVED PROGRESS" : finished ? (pending > 0 ? "WORLD COMPLETE — MAP UPDATES PENDING" : "COMPLETE") : "MIGRATION";
-        NamedTextColor phaseColor = plugin.state().cleanup || pending > 0 && finished ? NamedTextColor.GOLD
-                : plugin.state().clean || finished ? NamedTextColor.GREEN : indexing ? NamedTextColor.YELLOW : NamedTextColor.AQUA;
-        sender.sendMessage(value("Migration status", NamedTextColor.GOLD).decorate(TextDecoration.BOLD)
-                .append(label(" | ")).append(value(plugin.currentSeason(), seasonColor(plugin.currentSeason())))
-                .append(label(" | ")).append(value(phase, phaseColor)));
-        double tps = plugin.engine().currentTps();
-        NamedTextColor tpsColor = tps < plugin.settings().minTps ? NamedTextColor.RED : tps >= 19 ? NamedTextColor.GREEN : NamedTextColor.YELLOW;
-        sender.sendMessage(label("Migration paused: ").append(value(plugin.state().paused, plugin.state().paused ? NamedTextColor.YELLOW : NamedTextColor.GREEN))
-                .append(label("; TPS: ")).append(value(String.format(Locale.ROOT, "%.2f", tps), tpsColor)));
-        sender.sendMessage(label("Region-by-region migration; active winter storms: ").append(value(plugin.weather().activeStorms(), NamedTextColor.AQUA)));
-        for (var job : plugin.engine().jobs()) {
-            Component row = value(job.world.getName(), NamedTextColor.GOLD).append(label(": "));
-            if (job.indexingSavedProgress()) row = row.append(label("reading saved progress"));
-            else row = row.append(value(job.completed() + " / " + job.total() + " chunks (" + String.format(Locale.ROOT, "%.1f", job.percent()) + "%)", NamedTextColor.AQUA))
-                    .append(job.scanning() && !job.reportedFinished() ? value(" indexing", NamedTextColor.YELLOW) : Component.empty())
-                    .append(label("; deferred: ")).append(value(job.errors(), job.errors() > 0 ? NamedTextColor.RED : NamedTextColor.GREEN))
-                    .append(label("; accumulating snow: ")).append(value(job.transitioning(), NamedTextColor.BLUE))
-                    .append(label("; blocks removed this run: ")).append(value(job.removed(), NamedTextColor.AQUA))
-                    .append(label("; active region: ")).append(value(job.activeRegion(), NamedTextColor.AQUA));
-            sender.sendMessage(row);
-            if (job.error() != null) sender.sendMessage(value("Index error: " + job.error(), NamedTextColor.RED));
-        }
-        if(plugin.currentSeason()==Season.WINTER&&!plugin.state().cleanup&&!plugin.state().clean)
-            sender.sendMessage(label("Shared winter transition coverage: ")
-                    .append(indexing ? label("reading saved progress")
-                            : value(String.format(Locale.ROOT,"%.1f",plugin.engine().globalCoverageColumns()*100.0/256)+"%", NamedTextColor.AQUA)));
-        for (var entry : plugin.state().managedWorlds.entrySet())
-            if (org.bukkit.Bukkit.getWorld(UUID.fromString(entry.getKey())) == null)
-                sender.sendMessage(value("Tracked world unavailable: ", NamedTextColor.YELLOW).append(value(entry.getValue(), NamedTextColor.GOLD))
-                        .append(label("; load it to complete cleanup.")));
-        int cleanupPending = plugin.integrations().cleanupPending();
-        sender.sendMessage(label("BlueMap: ").append(value(plugin.integrations().status(), NamedTextColor.AQUA))
-                .append(label("; pending regions: ")).append(value(pending, pending > 0 ? NamedTextColor.GOLD : NamedTextColor.GREEN))
-                .append(label("; cleanup metadata pending: ")).append(value(cleanupPending, cleanupPending > 0 ? NamedTextColor.GOLD : NamedTextColor.GREEN)));
-        if(finished&&pending>0)
-            sender.sendMessage(value("World edits are complete", NamedTextColor.GREEN)
-                    .append(label("; BlueMap is still updating saved map tiles. This does not restart world migration.")));
-        boolean safe = plugin.state().clean && !plugin.state().cleanup && plugin.engine().allFinished() && plugin.weather().activeStorms() == 0
-            && plugin.integrations().cleanupPending() == 0;
-        sender.sendMessage(label("Plugin removal safe: ").append(value(safe ? "YES — stop the server normally before removing the jar" : "NO",
-                safe ? NamedTextColor.GREEN : NamedTextColor.RED)));
-        if (plugin.state().clean) sender.sendMessage(label("Use ").append(value("season sync", NamedTextColor.GOLD)).append(label(" or "))
-                .append(value("season set", NamedTextColor.GOLD)).append(label(" to re-enable seasonal behavior.")));
-    }
     @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> values = List.of();
         if (args.length == 1) values = List.of("info", "status", "reload", "season", "migration", "cleanup");
         else if (args.length == 2) values = switch (args[0].toLowerCase(Locale.ROOT)) {
-            case "season" -> List.of("set", "sync"); case "migration" -> List.of("status", "pause", "resume");
+            case "season" -> List.of("set", "sync"); case "migration" -> List.of("status", "details", "notify", "pause", "resume");
             case "cleanup", "uninstall" -> List.of("status", "confirm"); default -> List.of();
         };
         else if (args.length == 3 && args[0].equalsIgnoreCase("season") && args[1].equalsIgnoreCase("set"))

@@ -26,5 +26,6 @@ public interface IntegrationAdapter extends AutoCloseable {
     void tick();
     int pending();
     String status();
+    default String summary(){String text=status();int end=text.indexOf(';');return end<0?text:text.substring(0,end);}
     @Override void close();
 }

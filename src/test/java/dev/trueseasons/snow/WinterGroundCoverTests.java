@@ -30,7 +30,10 @@ public final class WinterGroundCoverTests {
             case "getAsString" -> text; case "getMaterial" -> material;
             case "getHalf" -> text.contains("half=upper") ? Bisected.Half.TOP : Bisected.Half.BOTTOM;
             case "getLayers" -> 1;
-            case "clone" -> data(text); default -> identity(p,m.getName(),a);
+            case "clone" -> data(text);
+            case "equals" -> a[0] instanceof BlockData other && text.equals(other.getAsString());
+            case "hashCode" -> text.hashCode();
+            default -> identity(p,m.getName(),a);
         });
     }
     static final class Fixture {

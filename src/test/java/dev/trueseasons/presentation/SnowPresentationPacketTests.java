@@ -24,7 +24,9 @@ public final class SnowPresentationPacketTests {
         thick=id(registry.states[snow].getClass().getMethod("setValue",type("net.minecraft.world.level.block.state.properties.Property"),Comparable.class)
             .invoke(registry.states[snow],layers,2));
         check(bridge.snowId==snow&&bridge.airId==air,"Native single-layer snow and air IDs are exact");
-        paletteShapes();emptySection();coverageAndBudgets();ownershipChanges();updates();negativeHeights();payloadPreservation();lifecycle();chunkLimit();heightAndReplacement();groundTextures();
+        Object craft=type("org.bukkit.craftbukkit.block.data.CraftBlockData").getMethod("createData",type("net.minecraft.world.level.block.state.BlockState")).invoke(null,registry.states[stone]);
+        check(bridge.stateId((org.bukkit.block.data.BlockData)craft)==stone,"Read-only planning converts actual Paper BlockData to the exact native source ID");
+        paletteShapes();emptySection();coverageAndBudgets();ownershipChanges();updates();negativeHeights();payloadPreservation();lifecycle();chunkLimit();heightAndReplacement();groundTextures();previews();priorityRefresh();meltPlants();
         System.out.println("Snow presentation packet tests passed: "+checks+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -193,6 +195,63 @@ public final class SnowPresentationPacketTests {
         Object admitted=view.update(single(8192<<4,5,0,snow));
         check(id(call(admitted,"getBlockState"))==air,"Freeing old sent chunk permits newly visible terrain to participate again");
     }
+    private static void priorityRefresh()throws Exception{
+        var owner=owners();var view=bridge.view();view.context(context(0,0,owner));
+        int[] source=filled(air);source[index(0,2,0)]=snow;
+        Object data=data(wire(source,4));
+        for(int x=0;x<6;x++){publish(owner,x,0,Map.of(0,2));view.chunk(chunk(data,x,0));}
+        view.context(context(256,0,owner));
+        for(int x=1;x<6;x++){view.prioritize(x,0);view.prioritize(x,0);view.dirty(x,0);}
+        for(int turn=0;turn<4;turn++){
+            List<Object> packets=view.refresh(1,1);
+            int expected=turn<3?turn+1:0;
+            check(packets.size()==1&&(int)call(field(packets.getFirst(),"sectionPos"),"x")==expected,
+                "Fresh chunks lead while routine work receives every fourth turn");
+            check(view.lastRefreshChunks()==1&&view.lastRefreshBlocks()==1,"Refresh accounts for visited chunks and actual changed blocks");
+        }
+        view.forget(4,0);
+        List<Object> last=view.refresh(8,256);
+        check(last.size()==1&&(int)call(field(last.getFirst(),"sectionPos"),"x")==5,"Forgetting removes priority work and promotion creates no duplicate entries");
+        check(!view.pending()&&view.hiddenColumns()==0,"Priority and ordinary queues converge together");
+        view.prioritize(5,0);view.dirty(5,0);
+        check(view.refresh(1,1).isEmpty()&&view.lastRefreshChunks()==1&&view.lastRefreshBlocks()==0,"A duplicate clean refresh consumes a chunk visit without block changes");
+        view.context(null);view.refresh(8,256);
+        check(view.lastRefreshChunks()==5&&view.lastRefreshBlocks()==0&&!view.pending(),"Final restoration keeps accounting even when its cache is cleared");
+    }
+    private static void meltPlants()throws Exception{
+        int lower=defaultId("TALL_GRASS"),flower=defaultId("DANDELION");
+        Object half=type("net.minecraft.world.level.block.state.properties.BlockStateProperties").getField("DOUBLE_BLOCK_HALF").get(null);
+        Class<?> halfType=type("net.minecraft.world.level.block.state.properties.DoubleBlockHalf");
+        Object upperValue=Arrays.stream(halfType.getEnumConstants()).filter(value->value.toString().equalsIgnoreCase("upper")).findFirst().orElseThrow();
+        int upper=id(registry.states[lower].getClass().getMethod("setValue",type("net.minecraft.world.level.block.state.properties.Property"),Comparable.class).invoke(registry.states[lower],half,upperValue));
+        var owner=owners();Map<Integer,SnowOwnershipSnapshots.PreviewColumn> candidates=Map.of(
+            0,new SnowOwnershipSnapshots.PreviewColumn(2,stone,lower,upper),1,new SnowOwnershipSnapshots.PreviewColumn(2,stone,flower));
+        Method publish=owner.getClass().getDeclaredMethod("preview",int.class,int.class,SnowOwnershipSnapshots.Preview.class);publish.setAccessible(true);
+        publish.invoke(owner,0,0,new SnowOwnershipSnapshots.Preview(VERSION,System.nanoTime(),candidates,true));
+        int[] source=filled(air);source[index(0,1,0)]=stone;source[index(1,1,0)]=stone;source[index(0,2,0)]=lower;source[index(0,3,0)]=upper;source[index(1,2,0)]=flower;
+        var view=bridge.view();view.context(previewContext(256,owner,60));Object original=chunk(data(wire(source,4)),0,0);
+        int[] client=sections(view.chunk(original)).getFirst().states();
+        check(client[index(0,2,0)]==snow&&client[index(0,3,0)]==air&&client[index(1,2,0)]==snow,"Melting retains snow over restored flowers and hides complete tall plants");
+        check(Arrays.equals(sections(original).getFirst().states(),source),"Melt previews never rewrite original restored plant data");
+        int[] sheltered=source.clone();sheltered[index(0,5,0)]=stone;var roof=bridge.view();roof.context(previewContext(256,owner,60));
+        int[] roofClient=sections(roof.chunk(chunk(data(wire(sheltered,4)),0,0))).getFirst().states();
+        check(roofClient[index(0,2,0)]==lower&&roofClient[index(0,3,0)]==upper,"A new roof rejects remaining snow without concealing its real plant");
+        view.context(previewContext(0,owner,60));drain(view,client,0,0,0);
+        check(Arrays.equals(client,source),"Zero remaining coverage restores both halves and flower states exactly");
+        view.context(previewContext(256,owner,60));client=sections(view.chunk(original)).getFirst().states();
+        Object replacement=single(0,2,0,stone);Object painted=view.update(replacement);client[index(0,2,0)]=id(call(painted,"getBlockState"));drain(view,client,0,0,0);
+        check(client[index(0,2,0)]==stone&&client[index(0,3,0)]==upper,"Player replacement invalidates the full column without resurrecting its old lower plant");
+        // A receipt is published before a physical snow-to-plant update reaches Netty.
+        var handoff=bridge.view();var actual=owners();publish(actual,0,0,Map.of(0,2));handoff.context(previewContext(256,actual,60));
+        int[] winter=filled(air);winter[index(0,1,0)]=stone;winter[index(0,2,0)]=snow;handoff.chunk(chunk(data(wire(winter,4)),0,0));
+        publish.invoke(actual,0,0,new SnowOwnershipSnapshots.Preview(VERSION,System.nanoTime(),Map.of(0,candidates.get(0)),true));
+        publish(actual,0,0,Map.of());
+        check(id(call(handoff.update(single(0,2,0,lower)),"getBlockState"))==snow,"Restored lower plants do not flash through remaining snow");
+        check(id(call(handoff.update(single(0,3,0,upper)),"getBlockState"))==air,"Restored upper plant packets remain hidden during handoff");
+        handoff.context(previewContext(0,actual,60));int[] handoffClient=winter.clone();drain(handoff,handoffClient,0,0,0);
+        check(handoffClient[index(0,2,0)]==lower&&handoffClient[index(0,3,0)]==upper,"Physical handoff retains the latest real restored source for final reveal");
+        view.context(null);drain(view,client,0,0,0);check(view.previewColumns()==0,"Season exit retires all melt overrides");
+    }
     private static void heightAndReplacement()throws Exception{
         var owner=owners();var view=bridge.view();view.context(new PaperSnowPackets.Context(VERSION,0,0,16,owner));
         Object empty=chunk(data(wire(filled(air),0)),0,0);view.chunk(empty);
@@ -207,6 +266,84 @@ public final class SnowPresentationPacketTests {
         view.context(null);Object replacement=chunk(data(wire(filled(stone),0)),0,0);
         check(view.chunk(replacement)==replacement,"Full chunk replacement during restoration passes newest original payload through");
         check(view.refresh(100,1000).isEmpty()&&view.retainedColumns()==0,"Pending restoration never resurrects stale snow after full chunk replacement");
+    }
+    private static void preview(SnowOwnershipSnapshots.WorldView owner,int x,int z,String version,int y,int support)throws Exception{
+        Map<Integer,SnowOwnershipSnapshots.PreviewColumn> columns=new HashMap<>();
+        for(int column=0;column<256;column++)columns.put(column,new SnowOwnershipSnapshots.PreviewColumn(y,support,air));
+        Method method=owner.getClass().getDeclaredMethod("preview",int.class,int.class,SnowOwnershipSnapshots.Preview.class);method.setAccessible(true);
+        method.invoke(owner,x,z,new SnowOwnershipSnapshots.Preview(version,System.nanoTime(),columns));
+    }
+    private static PaperSnowPackets.Context previewContext(int coverage,SnowOwnershipSnapshots.WorldView owner,int delay){return new PaperSnowPackets.Context(VERSION,coverage,0,16,owner,true,delay);}
+    private static void previews()throws Exception{
+        int[] source=filled(air);for(int c=0;c<256;c++)source[index(c&15,4,c>>4)]=stone;
+        var owner=owners();preview(owner,0,0,VERSION,5,stone);
+        var view=bridge.view();view.context(previewContext(64,owner,60));
+        Object original=chunk(data(wire(source,4)),0,0),painted=view.chunk(original);
+        int[] client=decode(sections(painted).getFirst().originalBlocks());
+        check(view.previewColumns()==64&&view.retainedColumns()==0,"Unfinished chunks show the exact target coverage without physical snow ownership");
+        for(int c=0;c<256;c++)check(client[index(c&15,5,c>>4)]==(within(c,0,0,64)?snow:air),"Preview coverage follows the same monotonic shuffle as physical reveal");
+        check(sections(painted).getFirst().blocks()==256+64,"Adding preview snow updates the native non-air section count");
+        check(Arrays.equals(decode(sections(original).getFirst().originalBlocks()),source),"Preview snow never mutates the original packet terrain");
+        view.context(previewContext(200,owner,60));drain(view,client,0,0,0);
+        check(view.previewColumns()==200,"Coverage advances directly without additional terrain planning or physical placements");
+        view.context(null);drain(view,client,0,0,0);
+        check(Arrays.equals(client,source)&&view.previewColumns()==0,"Retirement removes every preview and restores original air");
+
+        var late=bridge.view();var lateOwner=owners();late.context(previewContext(256,lateOwner,60));
+        client=source.clone();check(late.chunk(original)==original,"Chunks can arrive before preview planning without inventing snow");
+        preview(lateOwner,0,0,VERSION,5,stone);late.dirty(0,0);drain(late,client,0,0,0);
+        check(late.previewColumns()==256,"Already-visible unfinished chunks catch up from newly published read-only candidates");
+        Object replaced=late.update(single(0,5,0,stone));client[index(0,5,0)]=id(call(replaced,"getBlockState"));
+        drain(late,client,0,0,0);
+        check(client[index(0,5,0)]==stone&&late.previewColumns()==255,"Player replacements pass through and stale candidates cannot cover them again");
+        Object roof=late.update(single(1,9,0,stone));client[index(1,9,0)]=id(call(roof,"getBlockState"));drain(late,client,0,0,0);
+        check(client[index(1,5,0)]==air&&client[index(1,9,0)]==stone,"A new roof removes the preview below it without touching the roof");
+        late.forget(0,0);check(!late.pending()&&late.previewColumns()==0,"Chunk forgetting releases every preview");
+
+        var grace=bridge.view();var graceOwner=owners();preview(graceOwner,0,0,VERSION,5,stone);grace.context(previewContext(256,graceOwner,60));
+        client=decode(sections(grace.chunk(original)).getFirst().originalBlocks());
+        Class<?> action=type("net.minecraft.network.protocol.game.ServerboundPlayerActionPacket$Action");
+        Object start=Arrays.stream(action.getEnumConstants()).filter(value->((Enum<?>)value).name().equals("START_DESTROY_BLOCK")).findFirst().orElseThrow();
+        Class<?> direction=type("net.minecraft.core.Direction");Object up=Arrays.stream(direction.getEnumConstants()).filter(value->((Enum<?>)value).name().equals("UP")).findFirst().orElseThrow();
+        Object position=type("net.minecraft.core.BlockPos").getConstructor(int.class,int.class,int.class).newInstance(0,5,0);
+        Object digging=type("net.minecraft.network.protocol.game.ServerboundPlayerActionPacket").getConstructor(action,position.getClass(),direction).newInstance(start,position,up);
+        Object correction=grace.dig(digging);client[index(0,5,0)]=id(call(correction,"getBlockState"));
+        check(client[index(0,5,0)]==air&&grace.dig(digging)==null,"Native digging immediately corrects a preview once without waiting for a physical block break");
+        preview(graceOwner,0,0,VERSION,5,stone);grace.dirty(0,0);drain(grace,client,0,0,0);
+        check(client[index(0,5,0)]==air&&grace.previewColumns()==255,"Breaking preview snow keeps it absent even after a fresh valid terrain scan");
+        grace.forget(0,0);client=decode(sections(grace.chunk(original)).getFirst().originalBlocks());
+        check(client[index(0,5,0)]==air&&grace.previewColumns()==255,"Preview digging grace survives chunk forgetting and a full resend");
+        grace.context(previewContext(256,graceOwner,0));drain(grace,client,0,0,0);
+        check(client[index(0,5,0)]==snow,"Disabling the configured break delay releases preview-only grace too");
+        publish(graceOwner,0,0,Map.of(0,5));Object real=grace.update(single(0,5,0,snow));client[index(0,5,0)]=id(call(real,"getBlockState"));
+        check(client[index(0,5,0)]==snow&&grace.previewColumns()==255&&grace.retainedColumns()==1,"Real owned snow seamlessly replaces preview snow");
+        grace.context(null);drain(grace,client,0,0,0);
+        check(client[index(0,5,0)]==snow&&client[index(1,5,0)]==air,"Retirement retains physical snow while removing remaining previews");
+
+        var raceOwner=owners();preview(raceOwner,0,0,VERSION,5,stone);var race=bridge.view();race.context(previewContext(256,raceOwner,60));race.chunk(original);race.dig(digging);
+        publish(raceOwner,0,0,Map.of(0,5));Object physical=race.update(single(0,5,0,snow));
+        check(id(call(physical,"getBlockState"))==air,"A physical placement racing with preview digging cannot bypass the viewer's grace");
+        @SuppressWarnings("unchecked") Map<Long,long[]> graceRows=(Map<Long,long[]>)field(race,"breakGrace");
+        graceRows.values().iterator().next()[0]=System.nanoTime()-1;
+        Field expiry=race.getClass().getDeclaredField("nextGraceExpiry");expiry.setAccessible(true);expiry.setLong(race,System.nanoTime()-1);
+        check(race.timedRefreshDue(),"Grace expiry requests a pump even when coverage and ownership are unchanged");
+        List<Object> expired=race.refresh(100,1000);boolean revealed=false;
+        for(Object packet:expired){short[] positions=(short[])field(packet,"positions");Object[] values=(Object[])field(packet,"states");for(int i=0;i<positions.length;i++)if((positions[i]&65535)==5&&id(values[i])==snow)revealed=true;}
+        check(revealed&&!race.timedRefreshDue(),"Expiry reveals the retained physical source and clears the timed wakeup");
+
+        var stale=bridge.view();var staleOwner=owners();preview(staleOwner,0,0,"previous-winter",5,stone);stale.context(previewContext(256,staleOwner,60));
+        check(stale.chunk(original)==original&&stale.previewColumns()==0,"Previous-season preview snapshots are ignored");
+        preview(staleOwner,0,0,VERSION,5,stone);int[] roofed=source.clone();roofed[index(0,8,0)]=stone;
+        stale.chunk(chunk(data(wire(roofed,4)),0,0));check(stale.previewColumns()==255,"Full packets revalidate sky exposure against newer roofs");
+        int[] unsupported=source.clone();unsupported[index(0,4,0)]=air;
+        stale.chunk(chunk(data(wire(unsupported,4)),0,0));check(stale.previewColumns()==255,"Full packets revalidate saved preview supports");
+
+        var grassOwner=owners();int plain=ground("GRASS_BLOCK",false);preview(grassOwner,0,0,VERSION,5,plain);
+        int[] grassy=filled(air);for(int c=0;c<256;c++)grassy[index(c&15,4,c>>4)]=plain;
+        var grassView=bridge.view();grassView.context(previewContext(256,grassOwner,60));
+        client=decode(sections(grassView.chunk(chunk(data(wire(grassy,4)),0,0))).getFirst().originalBlocks());
+        check(client[index(0,4,0)]==ground("GRASS_BLOCK",true),"Preview snow displays snowy support sides without saving ground changes");
+        grassView.context(null);drain(grassView,client,0,0,0);check(Arrays.equals(client,grassy),"Preview support sides restore exactly on retirement");
     }
     private static PaperSnowPackets.Context context(int coverage,int minY,SnowOwnershipSnapshots.WorldView ownership){return new PaperSnowPackets.Context(VERSION,coverage,minY,ownership);}
     private static int ground(String name,boolean snowy)throws Exception{
@@ -276,7 +413,7 @@ public final class SnowPresentationPacketTests {
     }
     private static Map<Integer,Integer> plane(int y){Map<Integer,Integer> result=new HashMap<>();for(int c=0;c<256;c++)result.put(c,y);return result;}
     private static int[] planeSource(int y){int[] result=filled(air);for(int c=0;c<256;c++)result[index(c&15,y,c>>4)]=snow;return result;}
-    private static boolean within(int c,int x,int z,int coverage){return (((c-Objects.hash(x,z,VERSION))*189)&255)<coverage;}
+    private static boolean within(int c,int x,int z,int coverage){return new dev.trueseasons.snow.SnowColumnOrder(x,z,VERSION).rank(c)<coverage;}
     private static void drain(PaperSnowPackets.View view,int[] client,int x,int section,int z)throws Exception{
         int guard=0;while(view.pending()){check(guard++<2000,"Pending reveals make bounded progress");List<Object> packets=view.refresh(1,13);check(updates(packets)<=13,"Every refresh obeys block budget");apply(client,packets,x,section,z);}
     }

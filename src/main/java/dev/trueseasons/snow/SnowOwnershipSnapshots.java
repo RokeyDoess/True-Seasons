@@ -1,6 +1,7 @@
 package dev.trueseasons.snow;
 
 import io.papermc.paper.event.packet.PlayerChunkLoadEvent;
+import io.papermc.paper.event.packet.PlayerChunkUnloadEvent;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,21 +15,41 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 /** Main-thread ownership publication with read-only packet-thread views. */
 public final class SnowOwnershipSnapshots implements Listener, AutoCloseable {
+    public record PreviewColumn(int y, int supportState, int airState,int upperState) {
+        public PreviewColumn(int y,int supportState,int airState){this(y,supportState,airState,-1);}
+    }
+    public record Preview(String version, long checkedAt, Map<Integer, PreviewColumn> columns,boolean melting) {
+        public Preview(String version,long checkedAt,Map<Integer,PreviewColumn> columns){this(version,checkedAt,columns,false);}
+        public Preview { Objects.requireNonNull(version); columns = Map.copyOf(columns); }
+    }
     public record Snapshot(Map<Integer, Integer> heights) {
         public static final Snapshot EMPTY = new Snapshot(Map.of());
         public Snapshot { heights = Map.copyOf(heights); }
     }
     public static final class WorldView {
+        private final PreviewCapacity capacity;
+        public WorldView(){this(new PreviewCapacity());}
+        private WorldView(PreviewCapacity capacity){this.capacity=capacity;}
         private final ConcurrentHashMap<Long, Snapshot> chunks = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<Long, Preview> previews = new ConcurrentHashMap<>();
+        public Preview preview(int x, int z) { return previews.get(key(x,z)); }
+        private void preview(int x, int z, Preview preview) {
+            long key=key(x,z);
+            if (preview == null || preview.columns().isEmpty()){if(previews.remove(key)!=null)capacity.used--;}
+            else if(previews.containsKey(key))previews.put(key,preview);
+            else if(capacity.used<65_536){previews.put(key,preview);capacity.used++;}
+        }
         /** Packet-thread safe; no Bukkit objects or terrain reads are retained. */
         public Snapshot snapshot(int x, int z) { return chunks.getOrDefault(key(x, z), Snapshot.EMPTY); }
         private boolean observed(int x, int z) { return chunks.containsKey(key(x, z)); }
         private void publish(int x, int z, Snapshot snapshot) { chunks.put(key(x, z), snapshot); }
-        private void forget(int x, int z) { chunks.remove(key(x, z)); }
-        private void clear() { chunks.clear(); }
+        private void forget(int x, int z) { chunks.remove(key(x, z)); preview(x,z,null); }
+        private void clear() { chunks.clear(); capacity.used-=previews.size();previews.clear(); }
     }
+    private static final class PreviewCapacity{int used;}
     private static final WorldView EMPTY_WORLD = new WorldView();
     private final ConcurrentHashMap<UUID, WorldView> worlds = new ConcurrentHashMap<>();
+    private final PreviewCapacity previewCapacity=new PreviewCapacity();
     private final SeasonalSnowService snow;
     private final Consumer<Chunk> onChanged;
     private final Logger logger;
@@ -51,7 +72,11 @@ public final class SnowOwnershipSnapshots implements Listener, AutoCloseable {
     /** Stable view for this loaded world; retaining it never retains the Bukkit world. */
     public WorldView world(UUID id) {
         Objects.requireNonNull(id);
-        return closed ? EMPTY_WORLD : worlds.computeIfAbsent(id, ignored -> new WorldView());
+        return closed ? EMPTY_WORLD : worlds.computeIfAbsent(id, ignored -> new WorldView(previewCapacity));
+    }
+    /** Main-thread transient publication; never writes chunk ownership or world data. */
+    public void preview(UUID world, int x, int z, Preview preview) {
+        if (!closed) world(world).preview(x,z,preview);
     }
     private static long key(int x, int z) { return ((long)x << 32) | (z & 0xffffffffL); }
     private void publish(Chunk chunk, SnowColumns columns) {
@@ -75,7 +100,7 @@ public final class SnowOwnershipSnapshots implements Listener, AutoCloseable {
     }
     private void capture(Chunk chunk) {
         if (closed) return;
-        try { publish(chunk, snow.observeOwnership(chunk)); }
+        try { snow.pruneMelt(chunk);publish(chunk, snow.observeOwnership(chunk)); }
         catch (IOException failure) {
             UUID id = chunk.getWorld().getUID();
             world(id).publish(chunk.getX(), chunk.getZ(), Snapshot.EMPTY);
@@ -91,6 +116,13 @@ public final class SnowOwnershipSnapshots implements Listener, AutoCloseable {
     public void onPlayerLoad(PlayerChunkLoadEvent event) {
         Chunk chunk = event.getChunk();
         if (!world(chunk.getWorld().getUID()).observed(chunk.getX(), chunk.getZ())) capture(chunk);
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void onPlayerUnload(PlayerChunkUnloadEvent event){
+        Chunk chunk=event.getChunk();
+        UUID leaving=event.getPlayer().getUniqueId();
+        for(var player:chunk.getPlayersSeeingChunk())if(!player.getUniqueId().equals(leaving))return;
+        WorldView view=worlds.get(chunk.getWorld().getUID());if(view!=null)view.preview(chunk.getX(),chunk.getZ(),null);
     }
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onUnload(ChunkUnloadEvent event) {

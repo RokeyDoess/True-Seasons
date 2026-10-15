@@ -50,6 +50,14 @@ public final class SnowReplenishmentService implements Listener, AutoCloseable {
         cooldowns.recordBreak(block.getWorld().getUID(), block.getX(), block.getZ(), block.getType(),
                 false, winterEnabled.test(block.getWorld()), settings.get().snowPlayerBreakCooldownSeconds);
     }
+    /** Main-thread notification after a viewer clears a packet-only snow preview. */
+    public void previewBroken(World world,int x,int z) {
+        if(!closed&&winterEnabled.test(world))cooldowns.record(SnowBreakCooldown.Column.at(world.getUID(),x,z),settings.get().snowPlayerBreakCooldownSeconds);
+    }
+    public boolean placementAllowed(org.bukkit.block.Block target) {
+        return settings.get().snowPlayerBreakCooldownSeconds<=0||cooldowns.size()==0
+            ||!cooldowns.blocked(SnowBreakCooldown.Column.at(target.getWorld().getUID(),target.getX(),target.getZ()));
+    }
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void protectBreakGrace(BlockFormEvent event) {
         if (closed || event.isCancelled()) return;

@@ -74,6 +74,8 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
             checks += SnowMigrationIntentRuntimeProbe.verify(this, seasons::settings, chunk);
         checks += dev.trueseasons.presentation.NativeSnowRuntimeProbe.verify(this);
         checks += WinterGroundCoverRuntimeProbe.verify(this, seasons::settings, chunk);
+        checks += SnowmeltRuntimeProbe.verify(seasons,chunk);
+            checks += SnowPassRuntimeProbe.verify(this,seasons::settings,chunk);
             chunk.getPersistentDataContainer().set(versionKey, PersistentDataType.STRING, stamp);
             var factory = SnowReplenishmentService.class.getDeclaredConstructor(JavaPlugin.class, SeasonalSnowService.class,
                 Supplier.class, Supplier.class, java.util.function.Predicate.class, java.util.function.Predicate.class,
@@ -110,12 +112,16 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
             time.set(60_000_000_000L);
             check(refill.refill(chunk, new int[]{2}).placed() == 1 && target.getType() == Material.SNOW,
                 "Snow becomes eligible again at expiry without restarting migration");
+            refill.previewBroken(world,target.getX(),target.getZ());
+            check(!refill.placementAllowed(target),"Preview digging shares grace with the physical migration pass");
+            time.set(120_000_000_000L);
+            check(refill.placementAllowed(target),"Physical placement becomes eligible after preview grace expires");
             var owns = SeasonalSnowService.class.getDeclaredMethod("owns", Block.class); owns.setAccessible(true);
             check((boolean) owns.invoke(snow, target), "Post-grace real snow retains seasonal ownership");
             refill.broken(new BlockBreakEvent(target, player)); snow.relinquish(target); target.setType(Material.AIR, false);
-            time.set(119_999_999_999L);
+            time.set(179_999_999_999L);
             check(refill.refill(chunk, new int[]{2}).placed() == 0, "Another successful break starts a fresh grace period");
-            time.set(120_000_000_000L);
+            time.set(180_000_000_000L);
             check(refill.refill(chunk, new int[]{2}).placed() == 1, "Repeated breaks do not make snow permanently unbreakable");
             BlockBreakEvent cancelled = new BlockBreakEvent(target, player); cancelled.setCancelled(true); refill.broken(cancelled);
             snow.relinquish(target); target.setType(Material.AIR, false);
@@ -131,8 +137,60 @@ public final class SnowCooldownRuntimeProbe extends JavaPlugin {
             seasons.state().paused = paused;
             world.setStorm(raining); world.setWeatherDuration(weatherDuration); world.setClearWeatherDuration(clearDuration);
         }
+        verifyPresentationSettings(seasons);
+        verifyNotifications(seasons);
         Files.writeString(Path.of("snow-cooldown-result.txt"), "PASS: " + checks + " real Paper snow-break cooldown checks; no generated terrain.");
         getLogger().info("PROBE_SNOW_COOLDOWN_PASSED " + checks + " checks");
+    }
+    private void verifyPresentationSettings(TrueSeasonsPlugin seasons)throws Exception{
+        Path file=seasons.getDataFolder().toPath().resolve("snow.yml");byte[] original=Files.readAllBytes(file);
+        var yaml=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file.toFile());
+        String version=seasons.version();long revision=seasons.state().revision;
+        int winter=seasons.state().winterColumns,melt=seasons.state().meltColumns;
+        try{
+            yaml.set("presentation",null);yaml.save(file.toFile());seasons.reloadSettings();
+            check(seasons.settings().snowPresentation.equals(new dev.trueseasons.config.SnowPresentationLimits(64,8192)),
+                "An existing snow.yml gains the conservative shared presentation defaults");
+            yaml=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(file.toFile());
+            check(yaml.getInt("presentation.max-chunks-per-tick")==64&&yaml.getInt("presentation.max-block-updates-per-tick")==8192,
+                "Both new options are written to an existing configuration");
+            yaml.set("presentation.max-chunks-per-tick",3);yaml.set("presentation.max-block-updates-per-tick",17);
+            yaml.save(file.toFile());seasons.reloadSettings();
+            check(seasons.settings().snowPresentation.equals(new dev.trueseasons.config.SnowPresentationLimits(3,17)),
+                "Reload retains custom preview limits");
+            var presentationField=TrueSeasonsPlugin.class.getDeclaredField("presentation");presentationField.setAccessible(true);
+            Object presentation=presentationField.get(seasons);
+            var budgetField=presentation.getClass().getDeclaredField("snowBudget");budgetField.setAccessible(true);Object budget=budgetField.get(presentation);
+            for(String name:List.of("chunkLimit","blockLimit")){
+                var limit=budget.getClass().getDeclaredField(name);limit.setAccessible(true);
+                check(limit.getInt(budget)==(name.equals("chunkLimit")?3:17),"Reload delivers "+name+" to the active shared budget");
+            }
+            check(seasons.version().equals(version)&&seasons.state().revision==revision
+                    &&seasons.state().winterColumns==winter&&seasons.state().meltColumns==melt,
+                "Changing presentation limits preserves migration version and snow coverage");
+            Settings accepted=seasons.settings();yaml.set("presentation.max-chunks-per-tick",0);yaml.save(file.toFile());
+            try{seasons.reloadSettings();throw new AssertionError("Invalid presentation configuration was accepted");}
+            catch(IllegalArgumentException expected){check(seasons.settings()==accepted,"Invalid limits leave the active settings intact");}
+        }finally{Files.write(file,original);seasons.reloadSettings();}
+    }
+    private void verifyNotifications(TrueSeasonsPlugin seasons)throws Exception{
+        check(seasons.settings().seasonAnnouncements&&seasons.settings().migrationAnnouncements,
+            "An existing config gains both announcement defaults");
+        var saved=new dev.trueseasons.state.StateStore(seasons.getDataFolder().toPath().resolve("state"));
+        check(seasons.version().equals(saved.announcementVersion),"Startup records the announcement version without replaying an old transition");
+        List<String> messages=new ArrayList<>();UUID viewer=UUID.randomUUID();
+        Player player=(Player)Proxy.newProxyInstance(Player.class.getClassLoader(),new Class<?>[]{Player.class},(proxy,method,args)->switch(method.getName()){
+            case "getUniqueId"->viewer;case "hasPermission"->true;
+            case "sendMessage"->{messages.add(net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                .serialize((net.kyori.adventure.text.Component)args[0]));yield null;}
+            default->throw new AssertionError("Unexpected notification command call: "+method.getName());
+        });
+        var command=seasons.getCommand("trueseasons");var executor=command.getExecutor();
+        executor.onCommand(player,command,"ts",new String[]{"migration","notify"});
+        check(messages.size()==1&&messages.getLast().contains("enabled")&&messages.getLast().contains("5 seconds"),
+            "The registered player command enables five-second updates on real Paper");
+        executor.onCommand(player,command,"ts",new String[]{"migration","notify"});
+        check(messages.size()==2&&messages.getLast().contains("disabled"),"The same registered command toggles updates off");
     }
     private void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);

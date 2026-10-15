@@ -1,5 +1,11 @@
 # Only normal/overworld dimensions are eligible. Empty list includes all overworlds.
 worlds: []
+announcements:
+  # A short, unprefixed season-start message to all online players.
+  season-start: true
+  # Migration start/completion notices to admins and operators, with [True Seasons].
+  # Completion waits for terrain work and pending BlueMap updates.
+  migration: true
 migration:
   enabled: true
   # Async loads in flight, shared by migration and cleanup.

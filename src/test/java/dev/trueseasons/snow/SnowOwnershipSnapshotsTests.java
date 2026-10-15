@@ -90,6 +90,15 @@ public final class SnowOwnershipSnapshotsTests {
         check(retained.snapshot(4,-3) == SnowOwnershipSnapshots.Snapshot.EMPTY
                 && failing.world(id).snapshot(4,-3) == SnowOwnershipSnapshots.Snapshot.EMPTY,
             "Close clears retained world views and closed reads remain empty");
+        var bounded=new SnowOwnershipSnapshots(fixture.snow,ignored->{},logger);UUID secondWorld=UUID.randomUUID();
+        var preview=new SnowOwnershipSnapshots.Preview("winter",1,Map.of(0,new SnowOwnershipSnapshots.PreviewColumn(65,0,0)),true);
+        for(int x=0;x<65_536;x++)bounded.preview(id,x,0,preview);
+        bounded.preview(secondWorld,0,0,preview);
+        check(bounded.world(secondWorld).preview(0,0)==null,"All worlds share the server preview cap");
+        bounded.preview(id,0,0,null);bounded.preview(secondWorld,0,0,preview);
+        check(bounded.world(secondWorld).preview(0,0)==preview,"Clearing a preview releases capacity for another world");
+        bounded.onWorldUnload(new WorldUnloadEvent(world));bounded.preview(secondWorld,1,0,preview);
+        check(bounded.world(secondWorld).preview(1,0)==preview,"World unloading returns all transient capacity");bounded.close();
         System.out.println("Snow ownership snapshot tests passed: " + checks + " assertions");
     }
     private static Object invoke(Method method, Object target, Object[] args) throws Throwable {

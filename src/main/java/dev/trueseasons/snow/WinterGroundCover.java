@@ -19,6 +19,15 @@ final class WinterGroundCover {
             "RED_MUSHROOM", "BROWN_MUSHROOM", "TORCHFLOWER", "PITCHER_PLANT");
     private final NamespacedKey key;
     private final Function<String, BlockData> parse;
+    private final Map<BlockData, String> stateText = new LinkedHashMap<>(128, .75f, true);
+    String text(BlockData data) {
+        String existing = stateText.get(data);
+        if (existing != null) return existing;
+        String encoded = data.getAsString();
+        if (stateText.size() >= 1024) stateText.remove(stateText.keySet().iterator().next());
+        stateText.put(data.clone(), encoded);
+        return encoded;
+    }
     WinterGroundCover(Plugin plugin) { this(plugin, Bukkit::createBlockData); }
     WinterGroundCover(Plugin plugin, Function<String, BlockData> parse) {
         key = new NamespacedKey(plugin, "ground_cover_v1"); this.parse = parse;
@@ -85,30 +94,32 @@ final class WinterGroundCover {
             if (occupied(lower, previous.lower) && lower.getType() != Material.SNOW
                     || upper != null && occupied(upper, previous.upper) && upper.getType() != Material.SNOW) return null;
             List<Block> blocks = new ArrayList<>(2);
-            if (upper != null && upper.getBlockData().getAsString().equals(previous.upper.getAsString())) {
+            if (upper != null && upper.getBlockData().equals(previous.upper)) {
                 blocks.add(upper);
             }
-            if (lower.getBlockData().getAsString().equals(previous.lower.getAsString())) {
+            if (lower.getBlockData().equals(previous.lower)) {
                 blocks.add(lower);
             }
             return blocks.isEmpty() ? null : new Removal(column, previous, blocks);
         }
         if (!eligible(top.getType())) return null;
-        Block lower = top, upper = null; BlockData data = top.getBlockData();
+        Block lower = top, upper = null; BlockData data = top.getBlockData(), upperData = null;
         if (data instanceof Bisected half) {
             if (half.getHalf() != Bisected.Half.TOP) return null;
             upper = top; lower = top.getRelative(BlockFace.DOWN);
-            if (!(lower.getBlockData() instanceof Bisected bottom) || bottom.getHalf() != Bisected.Half.BOTTOM
+            upperData = data; data = lower.getBlockData();
+            if (!(data instanceof Bisected bottom) || bottom.getHalf() != Bisected.Half.BOTTOM
                     || lower.getType() != top.getType()) return null;
         }
         Block support = lower.getRelative(BlockFace.DOWN);
         if (support.getY() < state.chunk.getWorld().getMinHeight() || air(support.getType())) return null;
         // Preserve unusual/world-edited vegetation that could not safely be restored even now.
         // This check applies only to NEW snapshots; unfinished durable plans remain recoverable.
-        if (!lower.canPlace(lower.getBlockData()) || upper != null && !upper.canPlace(upper.getBlockData())) return null;
-        var snapshot = new GroundCoverColumns.Plant(lower.getY(), lower.getBlockData().getAsString(),
-                upper == null ? null : upper.getBlockData().getAsString(), support.getBlockData().getAsString());
-        Parsed parsed = new Parsed(snapshot, lower.getBlockData(), upper == null ? null : upper.getBlockData(), support.getBlockData());
+        if (!lower.canPlace(data) || upper != null && !upper.canPlace(upperData)) return null;
+        BlockData supportData = support.getBlockData();
+        var snapshot = new GroundCoverColumns.Plant(lower.getY(), text(data),
+                upperData == null ? null : text(upperData), text(supportData));
+        Parsed parsed = new Parsed(snapshot, data, upperData, supportData);
         return new Removal(column, parsed, upper == null ? List.of(lower) : List.of(upper, lower));
     }
     record Restoration(int restored, int conflicts) {}
@@ -137,7 +148,7 @@ final class WinterGroundCover {
         return new Restoration(restored, conflicts);
     }
     private static boolean occupied(Block block, BlockData original) {
-        return !air(block.getType()) && !block.getBlockData().getAsString().equals(original.getAsString());
+        return !air(block.getType()) && !block.getBlockData().equals(original);
     }
     private static boolean sameSupport(BlockData actual, BlockData original) {
         // Grass/mycelium can spread onto dirt while a plant is hidden. Keep the
@@ -148,7 +159,7 @@ final class WinterGroundCover {
         if (actual instanceof Snowable a && original instanceof Snowable o) {
             actual = a.clone(); original = o.clone(); ((Snowable) actual).setSnowy(false); ((Snowable) original).setSnowy(false);
         }
-        return actual.getAsString().equals(original.getAsString());
+        return actual.equals(original);
     }
     private static boolean naturalSoil(Material material) {
         return material == Material.DIRT || material == Material.GRASS_BLOCK || material == Material.MYCELIUM;

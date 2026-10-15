@@ -3,12 +3,22 @@ package dev.trueseasons.migration;
 import java.util.*;
 import java.util.function.Predicate;
 
-/** One active region, numeric region/slot order, and bounded per-region work selection. */
+/** One active region, a square spiral from the origin, and bounded slot selection. */
 final class RegionWorkQueue {
     record Region(int x, int z) implements Comparable<Region> {
         static Region of(ChunkPos pos) { return new Region(Math.floorDiv(pos.x(), 32), Math.floorDiv(pos.z(), 32)); }
         @Override public int compareTo(Region other) {
-            int order = Integer.compare(z, other.z); return order != 0 ? order : Integer.compare(x, other.x);
+            long ring=Math.max(Math.abs((long)x),Math.abs((long)z));
+            long otherRing=Math.max(Math.abs((long)other.x),Math.abs((long)other.z));
+            int order=Long.compare(ring,otherRing);
+            return order!=0?order:Long.compare(offset(ring),other.offset(otherRing));
+        }
+        private long offset(long ring){
+            if(ring==0)return 0;
+            if(x==ring&&z>-ring)return z+ring-1;
+            if(z==ring)return 2*ring+ring-1-x;
+            if(x==-ring)return 4*ring+ring-1-z;
+            return 6*ring+x+ring-1;
         }
     }
     private static final Comparator<ChunkPos> SLOT = Comparator.comparingInt(pos -> Math.floorMod(pos.z(),32)*32+Math.floorMod(pos.x(),32));

@@ -16,6 +16,9 @@ public final class Settings {
     public final Set<String> worlds;
     public final int concurrency, perTick, rescanSeconds, blueMapSeconds, blueMapRegions;
     public final int playerRadius, snowStepColumns, snowStepTicks, snowPlayerBreakCooldownSeconds;
+    public final boolean snowmelt;
+    public final SnowPresentationLimits snowPresentation;
+    public final boolean seasonAnnouncements, migrationAnnouncements;
     public final double minTps, millis;
     public final boolean enabled, prioritize, snow, protectSnow, weather, blueMap;
     public final boolean allExposed, snowTransition, winterStorm, winterSnowfall, groundCover;
@@ -49,6 +52,8 @@ public final class Settings {
         if (main.getBoolean("migration.generate-missing-chunks", false))
             throw new IllegalArgumentException("Generating missing chunks is forbidden");
         enabled = main.getBoolean("migration.enabled", true);
+        seasonAnnouncements = main.getBoolean("announcements.season-start", true);
+        migrationAnnouncements = main.getBoolean("announcements.migration", true);
         prioritize = main.getBoolean("migration.prioritize-player-chunks", true);
         playerRadius = bounded(main.getInt("migration.player-radius-chunks", 4), 0, 16);
         snow = sn.getBoolean("enabled", true);
@@ -57,6 +62,10 @@ public final class Settings {
         if (!List.of("all-exposed", "whitelist").contains(surfaceMode)) throw new IllegalArgumentException("Invalid snow surface-mode");
         allExposed = surfaceMode.equals("all-exposed");
         snowTransition = sn.getBoolean("transition.enabled", true);
+        snowmelt = sn.getBoolean("snowmelt.enabled", true);
+        snowPresentation = SnowPresentationLimits.read(sn);
+        boolean legacyMeltTimer=sn.contains("snowmelt.duration-seconds");
+        sn.set("snowmelt.duration-seconds",null); // Migration progress now drives both seasonal snow transitions.
         snowStepColumns = bounded(sn.getInt("transition.columns-per-step", 16), 1, 256);
         snowStepTicks = bounded(sn.getInt("transition.step-ticks", 5), 1, 200);
         snowPlayerBreakCooldownSeconds = bounded(sn.getInt("replenishment.player-break-cooldown-seconds", 60), 0, 86400);
@@ -105,7 +114,7 @@ public final class Settings {
             var yaml = entry.getValue();
             var defaults = YamlConfiguration.loadConfiguration(new InputStreamReader(
                 Objects.requireNonNull(plugin.getResource(entry.getKey() + ".yml")), StandardCharsets.UTF_8));
-            boolean changed = entry.getKey().equals("snow") && legacySnowMigrated || entry.getKey().equals("weather") && (legacyParticles||legacyStormTimer);
+            boolean changed = entry.getKey().equals("snow") && (legacySnowMigrated||legacyMeltTimer) || entry.getKey().equals("weather") && (legacyParticles||legacyStormTimer);
             if(entry.getKey().equals("weather")&&legacyStormTimer)yaml.setComments("winter-storm.start-on-winter",defaults.getComments("winter-storm.start-on-winter"));
             if (entry.getKey().equals("weather") && legacyParticles) yaml.setComments("snowfall.enabled", defaults.getComments("snowfall.enabled"));
             if (changed) {

@@ -374,11 +374,19 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     public boolean worldFinished(World world) { Job job=jobs.get(world.getUID()); return job!=null&&job.finished(); }
     public int globalCoverageColumns() { return plugin.state().winterVersion.equals(plugin.version())?plugin.state().winterColumns:0; }
     private void updateCoverage() {
-        if(plugin.currentSeason()!=Season.WINTER||plugin.state().cleanup||plugin.state().clean||globalCoverageColumns()>=256)return;
+        boolean melting=plugin.melting();
+        if(plugin.state().cleanup||plugin.state().clean||(!melting&&plugin.currentSeason()!=Season.WINTER)
+                ||melting&&plugin.state().meltColumns==0||!melting&&globalCoverageColumns()>=256)return;
         List<Job> active=jobs.values().stream().filter(job -> plugin.eligible(job.world)).toList();
         if(active.isEmpty()||active.stream().anyMatch(job -> !job.scanned))return;
         long total=active.stream().mapToLong(job -> job.total()*256L).sum();
         long covered=active.stream().mapToLong(Job::coveredColumns).sum();
+        if(melting){
+            int remaining=total==0?0:(int)Math.max(0,(total-covered)*plugin.state().meltStartColumns/total);
+            if(active.stream().anyMatch(job->!job.finished()))remaining=Math.max(1,remaining);
+            if(remaining<plugin.state().meltColumns){plugin.state().meltColumns=remaining;plugin.persist();}
+            return;
+        }
         int value=total==0?256:(int)Math.min(256,covered*256/total);
         if(active.stream().anyMatch(job -> !job.finished()))value=Math.min(255,value);
         if(value>plugin.state().winterColumns) { plugin.state().winterColumns=value; plugin.persist(); }

@@ -74,6 +74,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     private int probeCursor, purgeCursor;
     private boolean closed;
     private String detail = "waiting for BlueMap";
+    private String brief="waiting for BlueMap";
     private String lastFailure;
     public BlueMapIntegration(JavaPlugin plugin, Supplier<Settings> settings) throws Exception {
         this.plugin = plugin; this.settings = settings;
@@ -496,6 +497,12 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         if (!proofErrors.isEmpty()) status.append("; unreadable source: ").append(proofErrors.values().iterator().next());
         if (lastFailure != null) status.append("; retrying: ").append(lastFailure);
         detail = status.toString();
+        String reason=!proofErrors.isEmpty()?"source read error":lastFailure!=null?"retrying after an error"
+            :colorFailure!=null||visualQueue.failure()!=null?"seasonal colors need attention"
+            :frozen>0?"maps frozen":manager!=null&&!manager.isRunning()?"renderer stopped":unmapped>0&&instance.isPresent()?"map/world not configured"
+            :savingRegions>0?"waiting for saves":migratingRegions>0?"waiting for terrain":coalescingRegions>0?"combining updates":null;
+        brief=(!settings.get().blueMap?"disabled":instance.isEmpty()?"waiting for BlueMap":pending()==0?"up to date":"updating")
+            +(reason==null?"":"; "+reason);
     }
     private byte[] encode(ChunkKey key) throws IOException {
         RenderLedger.Entry entry = ledger.entries().get(key); Purge purge = purges.get(key);
@@ -620,6 +627,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     }
     @Override public int pending() { return ledger.regions() + visiblePalettePending(); }
     @Override public String status() { return detail; }
+    @Override public String summary() { return brief; }
     @Override public void close() {
         closed = true; HandlerList.unregisterAll(this); if (bridge != null) flights.values().forEach(flight -> bridge.cancel(flight.ticket));
         detachColors();

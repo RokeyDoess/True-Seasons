@@ -58,11 +58,11 @@ public final class CommandPresentationTests {
         TrueSeasonsPlugin plugin = allocate(TrueSeasonsPlugin.class);
         StateStore state = allocate(StateStore.class);
         set(state, "managedWorlds", new LinkedHashMap<>()); set(state, "winterVersion", "fixture-winter"); set(state, "winterColumns", 128);
-        Settings settings = allocate(Settings.class); set(settings, "playerRadius", 4); set(settings, "minTps", 18.5);
+        Settings settings = allocate(Settings.class); set(settings, "playerRadius", 4); set(settings, "minTps", 18.5); set(settings,"enabled",true);
         WeatherService weather = allocate(WeatherService.class); set(weather, "storms", new HashMap<>());
         IntegrationAdapter maps = (IntegrationAdapter) Proxy.newProxyInstance(IntegrationAdapter.class.getClassLoader(), new Class<?>[]{IntegrationAdapter.class},
                 (proxy, method, values) -> switch (method.getName()) {
-                    case "status" -> "connected"; case "pending" -> 3; case "cleanupPending" -> 2;
+                    case "summary" -> "updating; waiting for saves"; case "status" -> "connected; 2 render batches; 99 metadata purges; region renders scheduled this run: 15; palette regions pending: 8; waiting for final saves: 3"; case "pending" -> 3; case "cleanupPending" -> 2;
                     default -> throw new AssertionError("Status must not mutate map requests: " + method.getName());
                 });
         IntegrationManager integrations = allocate(IntegrationManager.class); set(integrations, "blueMap", maps);
@@ -83,43 +83,56 @@ public final class CommandPresentationTests {
                     default -> throw new AssertionError("Unexpected sender access: " + method.getName());
                 });
         SeasonsCommand command = new SeasonsCommand(plugin);
-        for (String[] arguments : List.of(new String[]{"status"},new String[]{"migration"},new String[]{"migration","status"},new String[]{"cleanup","status"},new String[]{"uninstall","status"})) {
-            messages.clear(); command.onCommand(sender, null, "trueseasons", arguments);
-            check(!messages.isEmpty() && plain(messages.getFirst()).startsWith("Migration status"), "Every status route starts with Migration status");
-            check(colored(messages.getFirst(), "Migration status", NamedTextColor.GOLD), "Status headers use a readable gold highlight");
+        for(String[] arguments:List.of(new String[]{"migration"},new String[]{"migration","status"})){
+            messages.clear();command.onCommand(sender,null,"trueseasons",arguments);
+            check(plain(messages.getFirst()).startsWith("Migration status"),"Migration routes retain a clear separator");
+            check(messages.size()==5,"Normal migration output stays within five short rows for one world");
+            check(messages.stream().anyMatch(message->colored(message,"1 / 2 chunks (50.0%)",NamedTextColor.AQUA)),"Chunk ratios and percentages retain an aqua highlight");
+            check(messages.stream().anyMatch(message->colored(message,"1 deferred",NamedTextColor.RED)),"Deferred work is highlighted without printing successful zero counters");
+            check(messages.stream().filter(message->plain(message).startsWith("BlueMap:")).count()==1,"BlueMap has one summary row");
+            check(messages.stream().noneMatch(message->plain(message).contains("metadata purges")||plain(message).contains("render batches")||plain(message).contains("Plugin removal")),"Default migration avoids map internals and unrelated removal text");
         }
-        check(messages.stream().anyMatch(message -> colored(message, "1 / 2 chunks (50.0%)", NamedTextColor.AQUA)), "Progress ratio and percentage are highlighted together in aqua");
-        check(messages.stream().anyMatch(message -> plain(message).startsWith("Shared winter") && colored(message,"50.0%",NamedTextColor.AQUA)), "Shared winter coverage has its own aqua highlight");
-        check(messages.stream().anyMatch(message -> colored(message,"; deferred: ",NamedTextColor.GRAY) && colored(message,"1",NamedTextColor.RED)), "Deferred work is red beside a gray label");
-        check(messages.stream().anyMatch(message -> plain(message).startsWith("BlueMap:") && colored(message,"3",NamedTextColor.GOLD) && colored(message,"2",NamedTextColor.GOLD)), "Pending map counts are amber");
-        check(!state.cleanup, "Viewing cleanup status cannot start a cleanup");
-        check(command.onTabComplete(sender,null,"trueseasons",new String[]{"cleanup","st"}).equals(List.of("status")), "Cleanup status is discoverable through tab completion");
-
-        set(job,"scanned",false); messages.clear(); command.onCommand(sender,null,"trueseasons",new String[]{"status"});
-        check(plain(messages.getFirst()).startsWith("Migration status") && plain(messages.getFirst()).endsWith("INDEXING SAVED PROGRESS"),
-                "Initial saved progress reading is identified instead of appearing as a restarted migration");
-        Component initialWorld = messages.stream().filter(message -> plain(message).startsWith("fixture-world:")).findFirst().orElseThrow();
-        check(plain(initialWorld).equals("fixture-world: reading saved progress") && colored(initialWorld,"reading saved progress",NamedTextColor.GRAY),
-                "Initial indexing displays a gray reading notice instead of an unverified chunk ratio");
-        check(messages.stream().noneMatch(message -> plain(message).contains("%")), "Initial saved indexing does not display misleading zero progress or premature coverage percentages");
-        state.cleanup=true; messages.clear(); command.onCommand(sender,null,"trueseasons",new String[]{"cleanup","status"});
-        check(plain(messages.getFirst()).endsWith("CLEANUP"), "Cleanup remains the primary phase while its saved progress is indexed");
-        state.cleanup=false; state.clean=true; messages.clear(); command.onCommand(sender,null,"trueseasons",new String[]{"status"});
-        check(plain(messages.getFirst()).endsWith("RESTORED"), "Restored mode remains the primary phase while its saved progress is indexed");
-        state.clean=false; set(job,"scanned",true);
-
-        set(job,"done",new HashSet<>(Set.of(done,pending))); set(job,"nextStep",new HashMap<>()); set(job,"failures",new HashMap<>());
-        set(job,"completed",true); set(job,"scanning",true);
-        messages.clear(); command.onCommand(sender,null,"trueseasons",new String[]{"status"});
-        check(plain(messages.getFirst()).endsWith("WORLD COMPLETE — MAP UPDATES PENDING"), "A completed world's periodic rescan does not make its header look like a new migration");
-        check(messages.stream().anyMatch(message -> plain(message).startsWith("World edits are complete")), "Map-pending feedback still explains completion during a periodic rescan");
-        Component rescanningWorld=messages.stream().filter(message -> plain(message).startsWith("fixture-world:")).findFirst().orElseThrow();
-        check(colored(rescanningWorld,"2 / 2 chunks (100.0%)",NamedTextColor.AQUA) && !plain(rescanningWorld).contains("indexing"),
-                "An unchanged completed-world row keeps100 percent without a distracting indexing suffix");
-        check(!engine.allFinished(), "The status presentation does not change strict internal completion during a scan");
-        set(job,"done",new HashSet<>(Set.of(done))); set(job,"nextStep",new HashMap<>(Map.of(pending,20)));
-        set(job,"failures",new HashMap<>(Map.of(pending,30L))); set(job,"completed",false); set(job,"scanning",false);
-
+        var mapRow=messages.stream().filter(message->plain(message).startsWith("BlueMap:")).findFirst().orElseThrow();
+        check(colored(mapRow,"3 regions pending",NamedTextColor.GOLD)&&mapRow.hoverEvent()!=null,"Pending map counts are amber and full diagnostics remain available on hover");
+        Component live=new CommandOutput(plugin).progressUpdate();
+        check(plain(live).startsWith("Migration status")&&!plain(live).contains("\n")&&colored(live,"1 / 2 chunks (50.0%)",NamedTextColor.AQUA),"Live notifications use one compact line with highlighted progress");
+        check(plain(live).contains("snow: 50.0%")&&plain(live).contains("BlueMap: 3 regions pending"),"Live notifications retain shared coverage and compact map progress");
+        check(command.onTabComplete(sender,null,"trueseasons",new String[]{"migration","no"}).equals(List.of("notify")),"Live notifications are discoverable in command completion");
+        messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration","notify"});
+        check(messages.size()==1&&plain(messages.getFirst()).contains("available to players in game"),"Console cannot accidentally create a persistent progress subscription");
+        messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"status"});
+        check(plain(messages.getFirst()).startsWith("Season status")&&messages.size()==5,"Status is a compact overview including a single actionable error row");
+        check(messages.stream().noneMatch(message->plain(message).contains("fixture-world:")||plain(message).contains("region none")),"Status summarizes all worlds rather than duplicating migration rows");
+        check(messages.stream().anyMatch(message->plain(message).startsWith("Winter coverage:")&&colored(message,"50.0%",NamedTextColor.AQUA)),"The shared winter coverage stays easy to find");
+        messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration","details"});
+        check(messages.stream().anyMatch(message->plain(message).contains("blocks +"))&&messages.stream().anyMatch(message->plain(message).startsWith("Map cleanup:")),"Detailed counters require an explicit request");
+        check(command.onTabComplete(sender,null,"trueseasons",new String[]{"migration","de"}).equals(List.of("details")),"Detailed diagnostics are discoverable");
+        for(String action:List.of("cleanup","uninstall")){
+            messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{action,"status"});
+            check(plain(messages.getFirst()).startsWith("Cleanup status")&&messages.stream().anyMatch(message->plain(message).contains("Plugin removal: NOT READY")),"Cleanup has a dedicated header and removal readiness");
+        }
+        check(!state.cleanup,"Reading cleanup status cannot start restoration");
+        set(job,"scanned",false);messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"status"});
+        check(plain(messages.getFirst()).endsWith("READING SAVED PROGRESS"),"Initial saved indexing is identified clearly");
+        check(messages.stream().noneMatch(message->plain(message).contains("%")),"Unknown saved progress never shows a misleading percentage");
+        check(!plain(new CommandOutput(plugin).progressUpdate()).contains("%"),"Live notifications also suppress unknown percentages while indexing");
+        state.cleanup=true;messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"cleanup","status"});
+        check(plain(messages.getFirst()).endsWith("CLEANUP"),"Cleanup takes precedence while indexing");
+        state.cleanup=false;state.clean=true;messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"status"});
+        check(plain(messages.getFirst()).endsWith("RESTORED"),"Restored mode takes precedence while indexing");
+        state.clean=false;set(job,"scanned",true);
+        set(job,"done",new HashSet<>(Set.of(done,pending)));set(job,"nextStep",new HashMap<>());set(job,"failures",new HashMap<>());
+        set(job,"completed",true);set(job,"scanning",true);
+        messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration"});
+        check(plain(messages.getFirst()).endsWith("TERRAIN COMPLETE — MAP PENDING"),"A periodic rescan does not make completed terrain appear to restart");
+        check(messages.stream().anyMatch(message->colored(message,"2 / 2 chunks (100.0%)",NamedTextColor.AQUA)),"Completed world rows retain verified progress during periodic rescans");
+        check(!engine.allFinished(),"Command summaries do not loosen internal completion checks");
+        set(job,"done",new HashSet<>(Set.of(done)));set(job,"nextStep",new HashMap<>(Map.of(pending,20)));
+        set(job,"failures",new HashMap<>(Map.of(pending,30L)));set(job,"completed",false);set(job,"scanning",false);
+        set(settings,"snowmelt",true);set(plugin,"season",Season.SPRING);set(state,"meltVersion","fixture-winter");state.meltColumns=64;
+        messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"status"});
+        check(plain(messages.getFirst()).endsWith("SNOWMELT")&&messages.stream().anyMatch(message->colored(message,"25.0% remaining",NamedTextColor.AQUA)),"Snowmelt separates visible coverage from unchanged physical chunk progress");
+        set(settings,"snowmelt",false);set(plugin,"season",Season.WINTER);
         Path confirmationDirectory=Files.createTempDirectory(Path.of("").toAbsolutePath(),"trueseasons-command-state-");
         try {
             set(state,"file",confirmationDirectory.resolve("jobs.yml"));

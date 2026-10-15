@@ -137,7 +137,7 @@ public final class LocalWinterSnowTests {
         var event = new BlockFormEvent(f.block(65), state); guard.capNaturalSnow(event);
         check(event.isCancelled(), "Native snowfall cannot place ahead of zero shared coverage");
         cap[0] = 256; event = new BlockFormEvent(f.block(65), state); guard.capNaturalSnow(event);
-        check(!event.isCancelled(), "Native snowfall inside shared coverage remains permitted");
+        check(event.isCancelled(), "Unfinished terrain uses previews instead of extra native physical accumulation");
         cap[0] = 0; enabled[0] = false; event = new BlockFormEvent(f.block(65), state); guard.capNaturalSnow(event);
         check(!event.isCancelled(), "Non-managed winter weather remains untouched");
         enabled[0] = true; f.metadata.put(new NamespacedKey(f.plugin,"season_version"),

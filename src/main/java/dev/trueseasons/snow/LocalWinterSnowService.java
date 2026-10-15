@@ -1,114 +1,167 @@
 package dev.trueseasons.snow;
 
-import dev.trueseasons.api.SeasonChunkUpdatedEvent;
 import dev.trueseasons.config.Settings;
-import dev.trueseasons.migration.PlayerNeighborhood;
 import java.io.IOException;
 import java.util.*;
 import java.util.function.*;
 import org.bukkit.*;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.event.*;
 import org.bukkit.event.block.BlockFormEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+import io.papermc.paper.event.packet.PlayerChunkLoadEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 
-/** Loaded player terrain receives gradual storm snow without touching the region queue. */
+/** Bounded read-only planning for visible unfinished terrain. Physical edits belong to the region pass. */
 public final class LocalWinterSnowService implements Listener, AutoCloseable {
-    private static final int CHUNKS_PER_TICK = 8, COLUMNS_PER_CHUNK = 8, INSPECTIONS_PER_TICK = 32;
-    private static final long BUDGET_NANOS = 1_000_000;
+    @FunctionalInterface public interface PreviewSink {
+        void publish(UUID world,int x,int z,SnowOwnershipSnapshots.Preview preview);
+    }
+    private record Position(UUID world,int x,int z) {}
+    private static final int CHUNKS_PER_PLAYER=4096, MAX_SERVER_CHUNKS=65_536, INSPECTIONS_PER_TICK=64;
+    private static final long BUDGET_NANOS=1_000_000, REFRESH_NANOS=5_000_000_000L;
+    private static final int[] ALL_COLUMNS=new int[256];
+    static { for(int i=0;i<256;i++)ALL_COLUMNS[i]=i; }
     private final SeasonalSnowService snow;
     private final Supplier<Settings> settings;
     private final Supplier<String> version;
-    private final Predicate<World> winterEnabled, active;
-    private final IntSupplier coverage;
+    private final Predicate<World> winterEnabled,active;
     private final SnowReplenishmentService grace;
-    private final Consumer<Chunk> beforeWrite, afterWrite;
-    private List<Chunk> loaded = List.of();
-    private int cursor, ticks;
+    private final PreviewSink previews;
+    private final ToIntFunction<BlockData> stateId;
+    private final Map<Position,Long> checked=new HashMap<>();
+    private final PreviewPriorityQueue<Position> fresh=new PreviewPriorityQueue<>(MAX_SERVER_CHUNKS);
+    private List<Chunk> loaded=List.of();
+    private int cursor,ticks;
+    private int priorityTurns;
+    private int maximumChunks=CHUNKS_PER_PLAYER;
+    private String previousVersion;
     private boolean closed;
+    private Predicate<World> melting=world->false;
+    private Supplier<String> meltOrder=()->"";
+    private Predicate<Chunk> previewMissing=chunk->false;
+    public void previewMissing(Predicate<Chunk> missing){previewMissing=missing;}
+    public void melting(Predicate<World> enabled,Supplier<String> order){melting=enabled;meltOrder=order;}
+    public void invalidate(){clear();previousVersion=version.get();}
+    public int pendingPreviews(){return fresh.size();}
+    public int checkedPreviews(){return checked.size();}
 
-    /** Active predicate includes cached TPS, pause/cleanup, and all winter snow/weather gates. */
-    public LocalWinterSnowService(JavaPlugin plugin, SeasonalSnowService snow, Supplier<Settings> settings,
-            Supplier<String> version, Predicate<World> winterEnabled, Predicate<World> active,
-            IntSupplier coverage, SnowReplenishmentService grace,
-            Consumer<Chunk> beforeWrite, Consumer<Chunk> afterWrite) {
-        this(snow, settings, version, winterEnabled, active, coverage, grace, beforeWrite, afterWrite);
-        Bukkit.getPluginManager().registerEvents(this, plugin);
+    public LocalWinterSnowService(JavaPlugin plugin,SeasonalSnowService snow,Supplier<Settings> settings,
+            Supplier<String> version,Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,
+            SnowReplenishmentService grace,PreviewSink previews,ToIntFunction<BlockData> stateId) {
+        this(snow,settings,version,winterEnabled,active,coverage,grace,previews,stateId);
+        Bukkit.getPluginManager().registerEvents(this,plugin);
     }
-    LocalWinterSnowService(SeasonalSnowService snow, Supplier<Settings> settings,
-            Supplier<String> version, Predicate<World> winterEnabled, Predicate<World> active,
-            IntSupplier coverage, SnowReplenishmentService grace,
-            Consumer<Chunk> beforeWrite, Consumer<Chunk> afterWrite) {
-        this.snow = snow; this.settings = settings; this.version = version;
-        this.winterEnabled = winterEnabled; this.active = active; this.coverage = coverage;
-        this.grace = grace; this.beforeWrite = beforeWrite; this.afterWrite = afterWrite;
+    LocalWinterSnowService(SeasonalSnowService snow,Supplier<Settings> settings,Supplier<String> version,
+            Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,SnowReplenishmentService grace,
+            PreviewSink previews,ToIntFunction<BlockData> stateId) {
+        this.snow=snow;this.settings=settings;this.version=version;this.winterEnabled=winterEnabled;
+        this.active=active;this.grace=grace;this.previews=previews;this.stateId=stateId;
     }
-
-    /** Inverse of the migration's odd-multiplier permutation, with the same version salt. */
-    static boolean withinCoverage(int column, int chunkX, int chunkZ, String version, int coverage) {
-        if (column < 0 || column > 255 || coverage < 0 || coverage > 256)
-            throw new IllegalArgumentException("Invalid local snow coverage");
-        int rank = ((column - Objects.hash(chunkX, chunkZ, version)) * 189) & 255;
-        return rank < coverage; // 149 * 189 == 1 (mod 256).
+    LocalWinterSnowService(SeasonalSnowService snow,Supplier<Settings> settings,Supplier<String> version,
+            Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,SnowReplenishmentService grace,
+            Consumer<Chunk> beforeWrite,Consumer<Chunk> afterWrite) {
+        this(snow,settings,version,winterEnabled,active,coverage,grace,(world,x,z,preview)->{},data->0);
     }
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    static boolean withinCoverage(int column,int x,int z,String version,int coverage) {
+        if(coverage<0||coverage>256)throw new IllegalArgumentException("Invalid local snow coverage");
+        return new SnowColumnOrder(x,z,version).rank(column)<coverage;
+    }
+    @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
     public void capNaturalSnow(BlockFormEvent event) {
-        if (closed || event.isCancelled() || event.getNewState().getType() != Material.SNOW) return;
-        var block = event.getBlock(); World world = block.getWorld();
-        if (!winterEnabled.test(world) || !world.isChunkLoaded(block.getX() >> 4, block.getZ() >> 4)) return;
-        Chunk chunk = block.getChunk(); String current = version.get();
-        if (!snow.isComplete(chunk, current)
-                && !withinCoverage((block.getX() & 15) | ((block.getZ() & 15) << 4),
-                    chunk.getX(), chunk.getZ(), current, coverage.getAsInt())) event.setCancelled(true);
-    }
-    private boolean visible(Chunk chunk) { return !chunk.getPlayersSeeingChunk().isEmpty(); }
-    private boolean activeChunk(Chunk chunk) {
-        return !closed && chunk.isLoaded() && active.test(chunk.getWorld()) && chunk.getWorld().hasStorm()
-            && !snow.isComplete(chunk, version.get());
+        if(closed||event.getNewState().getType()!=Material.SNOW)return;
+        var block=event.getBlock();World world=block.getWorld();
+        if(!winterEnabled.test(world)||!world.isChunkLoaded(block.getX()>>4,block.getZ()>>4))return;
+        if(!snow.isComplete(block.getChunk(),version.get()))event.setCancelled(true);
     }
     boolean ready(Chunk chunk) {
-        return activeChunk(chunk) && visible(chunk);
+        return !closed&&chunk.isLoaded()&&active.test(chunk.getWorld())
+            &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get()))&&!chunk.getPlayersSeeingChunk().isEmpty();
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void visible(PlayerChunkLoadEvent event){
+        Chunk chunk=event.getChunk();
+        if(closed||!winterEnabled.test(chunk.getWorld())&&!melting.test(chunk.getWorld()))return;
+        resetVersion();queueFresh(event.getPlayer().getUniqueId(),chunk,true);
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void quit(PlayerQuitEvent event){fresh.removeViewer(event.getPlayer().getUniqueId());}
+    private void resetVersion(){String current=version.get();if(!Objects.equals(current,previousVersion)){clear();previousVersion=current;}}
+    private void queueFresh(UUID viewer,Chunk chunk,boolean arriving){
+        Position pos=position(chunk);
+        if(arriving&&previewMissing.test(chunk))checked.remove(pos);
+        Long last=checked.get(pos);
+        if((last==null||arriving&&System.nanoTime()-last>=REFRESH_NANOS)&&active.test(chunk.getWorld())
+                &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get())))fresh.offer(viewer,pos);
     }
     public void tick() throws IOException {
-        if (closed) return;
-        ticks++;
-        long deadline = System.nanoTime() + Math.min(BUDGET_NANOS, (long) (settings.get().millis * 1_000_000));
-        if (ticks == 1 || ticks % 20 == 0) {
-            List<Chunk> next = new ArrayList<>();
-            for (World world : Bukkit.getWorlds()) if (active.test(world) && !world.getPlayers().isEmpty())
-                Collections.addAll(next, world.getLoadedChunks());
-            loaded = List.copyOf(next);
+        if(closed)return;
+        ticks++;resetVersion();String current=version.get();
+        if(ticks==1||ticks%20==0) {
+            var players=new ArrayList<>(Bukkit.getOnlinePlayers());
+            maximumChunks=(int)Math.min(MAX_SERVER_CHUNKS,Math.max(CHUNKS_PER_PLAYER,(long)players.size()*CHUNKS_PER_PLAYER));
+            // Share the emergency cap fairly instead of always favoring the first connected players.
+            if(!players.isEmpty())Collections.rotate(players,(ticks/20)%players.size());
+            Set<Chunk> visible=new LinkedHashSet<>();
+            for(var player:players)if(winterEnabled.test(player.getWorld())||melting.test(player.getWorld()))
+                collectVisible(player,visible,maximumChunks,chunk->queueFresh(player.getUniqueId(),chunk,false));
+            loaded=List.copyOf(visible);
+            Set<Position> keep=new HashSet<>();
+            for(Chunk chunk:loaded)if(melting.test(chunk.getWorld())||!snow.isComplete(chunk,current))keep.add(position(chunk));
+            fresh.retain(keep::contains);
+            for(var it=checked.keySet().iterator();it.hasNext();) {
+                Position old=it.next();if(!keep.contains(old)) { previews.publish(old.world,old.x,old.z,null);it.remove(); }
+            }
         }
-        int attempted = 0; Set<Chunk> sampled = new HashSet<>();
-        for (int inspected = 0; !loaded.isEmpty() && inspected < INSPECTIONS_PER_TICK
-                && attempted < CHUNKS_PER_TICK && System.nanoTime() < deadline; inspected++) {
-            Chunk chunk = loaded.get(Math.floorMod(cursor++, loaded.size()));
-            // Actual sent chunks respect each viewer's distance without loading any terrain.
-            // The write path rechecks viewers after reentrant formation events.
-            if (!sampled.add(chunk) || !activeChunk(chunk) || !visible(chunk)) continue;
-            String current = version.get(); int shared = coverage.getAsInt();
-            if (shared <= 0) continue;
-            int step = Math.min(COLUMNS_PER_CHUNK, settings.get().snowStepColumns);
-            int[] columns = new int[Math.min(shared, step)];
-            for (int i = 0; i < columns.length; i++) columns[i] = PlayerNeighborhood.columnAt(
-                Math.floorMod((ticks / settings.get().snowStepTicks) * step + i, shared),
-                chunk.getX(), chunk.getZ(), current);
-            accumulate(chunk, columns, deadline); attempted++;
+        long deadline=System.nanoTime()+Math.min(BUDGET_NANOS,(long)(settings.get().millis*1_000_000));
+        for(int count=0;(!loaded.isEmpty()||!fresh.isEmpty())&&count<INSPECTIONS_PER_TICK&&System.nanoTime()<deadline;count++) {
+            Chunk chunk;
+            if(!fresh.isEmpty()&&(loaded.isEmpty()||(priorityTurns++&3)!=3)){
+                Position pos=fresh.poll();World world=Bukkit.getWorld(pos.world);
+                if(world==null||!world.isChunkLoaded(pos.x,pos.z))continue;
+                chunk=world.getChunkAt(pos.x,pos.z,false);
+            }else chunk=loaded.get(Math.floorMod(cursor++,loaded.size()));
+            if(!ready(chunk))continue;
+            Position pos=position(chunk);long now=System.nanoTime();
+            if(now-checked.getOrDefault(pos,now-REFRESH_NANOS)<REFRESH_NANOS)continue;
+            refresh(chunk,ALL_COLUMNS);
         }
     }
-    /** Deterministic live verification path keeps every activity, visibility, grace and coverage gate. */
-    public SeasonalSnowService.Result accumulate(Chunk chunk, int[] columns) throws IOException {
-        return accumulate(chunk, columns, Long.MAX_VALUE);
+    static void collectVisible(org.bukkit.entity.Player player,Set<Chunk> visible,int maximum){
+        collectVisible(player,visible,maximum,ignored->{});
     }
-    private SeasonalSnowService.Result accumulate(Chunk chunk, int[] columns, long deadline) throws IOException {
-        if (!ready(chunk)) return new SeasonalSnowService.Result(0, 0, 0, false);
-        String current = version.get(); int shared = coverage.getAsInt();
-        int[] available = grace.availableColumns(chunk, columns);
-        if (available.length == 0) return new SeasonalSnowService.Result(0, 0, 0, false);
-        var result = snow.accumulateLocalColumns(chunk, current, shared, available, beforeWrite, afterWrite,
-            deadline, () -> ready(chunk) && current.equals(version.get()) && shared <= coverage.getAsInt()
-                && grace.columnsAvailable(chunk, available));
-        if (result.changed()) Bukkit.getPluginManager().callEvent(new SeasonChunkUpdatedEvent(chunk, current, false, true));
-        return result;
+    static void collectVisible(org.bukkit.entity.Player player,Set<Chunk> visible,int maximum,Consumer<Chunk> observed){
+        World world=player.getWorld();
+        for(long key:player.getSentChunkKeys()){
+            if(visible.size()>=maximum)break;
+            int x=(int)key,z=(int)(key>>32);
+            // getSentChunks itself resolves wrappers through getChunkAt. Inspect the
+            // sent keys first, so an unloading chunk cannot cause even a disk reload.
+            if(world.isChunkLoaded(x,z)){Chunk chunk=world.getChunkAt(x,z,false);visible.add(chunk);observed.accept(chunk);}
+        }
     }
-    @Override public void close() { closed = true; loaded = List.of(); HandlerList.unregisterAll(this); }
+    public void refresh(Chunk chunk,int[] columns) {
+        if(!ready(chunk))return;
+        Position pos=position(chunk);if(!checked.containsKey(pos)&&checked.size()>=maximumChunks)return;
+        Integer height=chunk.getWorld().getGameRuleValue(GameRules.MAX_SNOW_ACCUMULATION_HEIGHT);
+        long start=System.nanoTime();String current=version.get();
+        if(melting.test(chunk.getWorld())){
+            try{previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),snow.meltPreview(chunk,meltOrder.get(),stateId,true));checked.put(pos,start);}
+            catch(IOException failure){previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),null);checked.put(pos,start);}
+            return;
+        }
+        int[] available=grace==null?columns:grace.availableColumns(chunk,columns);
+        var candidates=height!=null&&height<=0?Map.<Integer,SnowOwnershipSnapshots.PreviewColumn>of():snow.previewColumns(chunk,available,stateId);
+        if(ready(chunk)&&current.equals(version.get())){
+            previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),new SnowOwnershipSnapshots.Preview(current,start,candidates));
+            checked.put(pos,start);
+        }
+    }
+    /** Older live probes can invoke this method; local planning no longer places blocks. */
+    public SeasonalSnowService.Result accumulate(Chunk chunk,int[] columns) {
+        refresh(chunk,columns);return new SeasonalSnowService.Result(0,0,0,false);
+    }
+    private Position position(Chunk chunk){return new Position(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ());}
+    private void clear(){for(Position pos:checked.keySet())previews.publish(pos.world,pos.x,pos.z,null);checked.clear();fresh.clear();loaded=List.of();}
+    @Override public void close(){closed=true;clear();HandlerList.unregisterAll(this);}
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.0
+
+- Make winter snow appear across unfinished visible terrain and replace diagonal bands with a scattered pattern.
+- Melt snow gradually as regions restore, revealing saved plants underneath. Resume remaining snow previews after chunk reloads and restarts.
+- Process regions in a spiral from the world origin, finishing each region before moving outward.
+- Improve snow catch-up when players join or travel. Share configurable update limits across players and reduce repeated work during snow placement.
+- Let players clear preview snow, respecting the configured refill delay.
+- Shorten command output and keep BlueMap to one summary row. Add optional five-second progress updates with `/ts migration notify`.
+- Announce new seasons to players, with separate migration start and completion notices for admins and operators. Both can be disabled.
+- Rewrite the README around the plugin's features and move detailed settings into a server guide.
+
+Known limitations: plants wait for their region's terrain pass, and new views catch up within limited update batches. BlueMap shows saved terrain rather than the gradual player view. Autumn has no gradual color fade, some unusually large trees or structures can retain their original appearance, and cherry ground petals remain pink.
+
 ## 0.1.11
 
 - Reveal winter snow gradually across the terrain players can see, while keeping background updates in region order.

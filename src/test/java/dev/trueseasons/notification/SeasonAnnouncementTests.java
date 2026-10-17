@@ -78,6 +78,9 @@ public final class SeasonAnnouncementTests {
             check(admin.messages.size()==count&&!notices.pending("restored"),"Restored mode stays silent");
             Files.writeString(root.resolve("jobs.yml"),"schema: 1\n");state=new StateStore(root);
             check(state.announcementVersion.isEmpty(),"Older state files accept the new optional announcement fields");
+            int publicCount=normal.messages.size();notices.paused("Automatic pause during BlueMap update: disk full");
+            check(normal.messages.size()==publicCount&&admin.text().getLast().contains("disk full")&&op.text().getLast().contains("disk full"),"Automatic pause notices explain the reason to admins and operators only");
+            check(contains(admin.messages.getLast(),"disk full",NamedTextColor.RED),"Automatic pause notices highlight failures in red");
         }finally{
             Path allowed=Path.of(System.getProperty("java.io.tmpdir")).toRealPath();
             if(!root.toRealPath().startsWith(allowed)||root.toRealPath().equals(allowed))throw new IllegalStateException("Unsafe test cleanup");

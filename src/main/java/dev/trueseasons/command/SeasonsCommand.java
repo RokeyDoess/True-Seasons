@@ -79,7 +79,8 @@ public final class SeasonsCommand implements CommandExecutor, TabCompleter, List
                                 .append(label(enabled?" · every 5 seconds; run /ts migration notify to stop.":".")));
                         }
                     } else if (args.length == 2 && List.of("pause", "resume").contains(args[1].toLowerCase(Locale.ROOT))) {
-                        plugin.state().paused = args[1].equalsIgnoreCase("pause"); plugin.persist();
+                        plugin.state().paused = args[1].equalsIgnoreCase("pause");
+                        plugin.state().pauseReason=plugin.state().paused?"Paused manually.":"";plugin.persist();
                         sender.sendMessage(value("Migration status", NamedTextColor.GOLD).decorate(TextDecoration.BOLD)
                                 .append(label(" | ")).append(value(plugin.state().paused ? "paused" : "resumed",
                                 plugin.state().paused ? NamedTextColor.YELLOW : NamedTextColor.GREEN)));

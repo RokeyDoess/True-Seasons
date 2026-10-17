@@ -116,7 +116,29 @@ public final class BlueMapVisualQueueTests {
             check(queue.pending() == 3, "old async acknowledgement cannot erase rediscovered A-to-B-to-A generation");
         }
         scopedCleanup(regions);
+        distinctRegions(regions);
         System.out.println("BlueMap visual queue tests passed");
+    }
+    private static void distinctRegions(List<Vector2i> regions)throws Exception{
+        Path directory=Files.createTempDirectory("trueseasons-distinct-regions-");UUID world=UUID.randomUUID(),other=UUID.randomUUID();
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            queue.target("surface","winter",()->regions);discovered(queue,"surface");
+            Set<RenderLedger.Region> known=new HashSet<>();Vector2i first=regions.getFirst();known.add(new RenderLedger.Region(world,first.getX(),first.getY()));
+            check(queue.appendPendingRegions("surface",world,false,known)&&known.size()==regions.size(),"terrain and palette requests in the same region count once");
+            queue.target("second-map","winter",()->regions);discovered(queue,"second-map");
+            check(queue.appendPendingRegions("second-map",world,false,known)&&known.size()==regions.size(),"two maps of the same world still count distinct world regions");
+            check(queue.appendPendingRegions("surface",other,false,known)&&known.size()==regions.size()*2,"equal coordinates in different worlds remain distinct");
+            Vector2i replacement=new Vector2i(99,-100);queue.target("surface","spring",()->List.of(replacement));discovered(queue,"surface");
+            known.clear();queue.appendPendingRegions("surface",world,false,known);
+            check(known.equals(Set.of(new RenderLedger.Region(world,99,-100))),"a new target replaces previous palette regions rather than accumulating old jobs");
+            CountDownLatch release=new CountDownLatch(1);
+            queue.target("discovering","winter",()->{if(!release.await(5,TimeUnit.SECONDS))throw new AssertionError("discovery timeout");return regions;});
+            try{check(!queue.appendPendingRegions("discovering",world,false,new HashSet<>()),"unfinished discovery reports an unknown count without blocking");}
+            finally{release.countDown();}discovered(queue,"discovering");
+            queue.acknowledge("surface",queue.receiptToken("surface"),List.of(replacement));acknowledged(queue,"surface");
+            known.clear();check(queue.appendPendingRegions("surface",world,false,known)&&known.isEmpty(),"durable completion removes a counted region");
+            check(!queue.appendPendingRegions("surface",world,true,known),"unresolved vanilla restoration is not presented as an invented physical region");
+        }
     }
     private static void scopedCleanup(List<Vector2i> regions) throws Exception {
         Path directory = Files.createTempDirectory("trueseasons-scoped-palette-cleanup-");

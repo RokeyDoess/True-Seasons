@@ -12,6 +12,7 @@ public final class StateStore {
     private final Path file;
     public Season override;
     public boolean cleanup, clean, paused;
+    public String pauseReason="";
     public int revision;
     public String winterVersion="";
     public int winterColumns;
@@ -35,6 +36,7 @@ public final class StateStore {
         override = value == null ? null : Season.valueOf(value);
         cleanup = data.getBoolean("cleanup"); clean = data.getBoolean("clean");
         paused = data.getBoolean("paused"); revision = data.getInt("revision");
+        pauseReason=data.getString("pause-reason","");
         winterVersion=data.getString("winter-transition.version","");
         winterColumns=data.getInt("winter-transition.coverage-columns",0);
         if(winterColumns<0||winterColumns>256)throw new IOException("Invalid saved winter coverage");
@@ -53,6 +55,7 @@ public final class StateStore {
         YamlConfiguration data = new YamlConfiguration();
         data.set("schema", 1); data.set("override", override == null ? null : override.name());
         data.set("cleanup", cleanup); data.set("clean", clean); data.set("paused", paused);
+        data.set("pause-reason",pauseReason);
         data.set("revision", revision);
         data.set("winter-transition.version",winterVersion); data.set("winter-transition.coverage-columns",winterColumns);
         data.set("last-season",lastSeason==null?null:lastSeason.name());

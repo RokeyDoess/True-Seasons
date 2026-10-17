@@ -30,6 +30,7 @@ public final class SnowPreviewPlanningTests {
     }
     private static void visibleKeys(){
         var terrain=new SnowReplenishmentTests.Fixture();int[] resolves={0};
+        boolean[] online={true},valid={true},dead={false},unavailable={false};int[] visibilityCalls={0};
         var world=(org.bukkit.World)java.lang.reflect.Proxy.newProxyInstance(org.bukkit.World.class.getClassLoader(),new Class<?>[]{org.bukkit.World.class},(p,m,a)->switch(m.getName()){
             case "isChunkLoaded"->(int)a[0]==4&&(int)a[1]==-3;
             case "getChunkAt"->{check((int)a[0]==4&&(int)a[1]==-3&&a.length==3&&Boolean.FALSE.equals(a[2]),"Visible collection only resolves already-loaded coordinates with generation disabled");resolves[0]++;yield terrain.chunk;}
@@ -37,12 +38,25 @@ public final class SnowPreviewPlanningTests {
         });
         var player=(org.bukkit.entity.Player)java.lang.reflect.Proxy.newProxyInstance(org.bukkit.entity.Player.class.getClassLoader(),new Class<?>[]{org.bukkit.entity.Player.class},(p,m,a)->switch(m.getName()){
             case "getWorld"->world;
-            case "getSentChunkKeys"->new LinkedHashSet<>(List.of(((long)-77<<32)|999L,((long)-3<<32)|4L));
+            case "isOnline"->online[0];case "isValid"->valid[0];case "isDead"->dead[0];
+            case "getSentChunkKeys"->{visibilityCalls[0]++;if(unavailable[0])throw new NullPointerException("Paper player chunk loader is detached");yield new LinkedHashSet<>(List.of(((long)-77<<32)|999L,((long)-3<<32)|4L));}
+            case "isChunkSent"->{visibilityCalls[0]++;if(unavailable[0])throw new IllegalStateException("Player is reconfiguring");yield true;}
             default->throw new AssertionError("Visibility must use keys without loading wrappers: "+m.getName());
         });
         Set<org.bukkit.Chunk> visible=new HashSet<>();LocalWinterSnowService.collectVisible(player,visible,4);
         check(visible.equals(Set.of(terrain.chunk))&&resolves[0]==1,"Unloaded sent keys cause no load and signed chunk coordinates remain exact");
         LocalWinterSnowService.collectVisible(player,visible,1);check(resolves[0]==1,"A full visible-cache budget performs no additional chunk resolution");
+        visible.clear();dead[0]=true;int calls=visibilityCalls[0];LocalWinterSnowService.collectVisible(player,visible,4);
+        check(visible.isEmpty()&&visibilityCalls[0]==calls,"Death skips Paper's detached chunk loader without pausing migration");
+        dead[0]=false;valid[0]=false;LocalWinterSnowService.collectVisible(player,visible,4);
+        check(visibilityCalls[0]==calls,"An invalid respawning player performs no visibility query");
+        valid[0]=true;online[0]=false;LocalWinterSnowService.collectVisible(player,visible,4);
+        check(visibilityCalls[0]==calls,"Disconnected players perform no visibility query");
+        online[0]=true;unavailable[0]=true;LocalWinterSnowService.collectVisible(player,visible,4);
+        check(visible.isEmpty()&&resolves[0]==1,"Transient Paper loader failure is treated as an unavailable view without terrain loads");
+        check(!dev.trueseasons.presentation.PlayerChunkVisibility.sent(player,0),"Single-chunk preview notifications also tolerate a detached loader");
+        unavailable[0]=false;LocalWinterSnowService.collectVisible(player,visible,4);
+        check(visible.size()==1&&dev.trueseasons.presentation.PlayerChunkVisibility.sent(player,0),"Normal visibility resumes after the player loader returns");
     }
     private static void biomes(){
         int[] lookups={0};

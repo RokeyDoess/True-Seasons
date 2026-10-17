@@ -75,6 +75,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     private boolean closed;
     private String detail = "waiting for BlueMap";
     private String brief="waiting for BlueMap";
+    private int displayPendingRegions=-1;
     private String lastFailure;
     public BlueMapIntegration(JavaPlugin plugin, Supplier<Settings> settings) throws Exception {
         this.plugin = plugin; this.settings = settings;
@@ -461,6 +462,14 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         int transitions = 0, awaitingSave = 0, ready = 0, sourceDeletions = 0, unmapped = 0, frozen = 0;
         Set<Region> pendingRegions = new HashSet<>(); ledger.entries().keySet().forEach(key -> pendingRegions.add(key.region()));
         regionWaits.keySet().retainAll(pendingRegions);
+        Set<Region> allRegions=new HashSet<>(pendingRegions);boolean discovered=true;
+        boolean restoring=lastVisualState==null||lastVisualState.eligibleWorlds().isEmpty();
+        for(String map:mappedMapIds()){
+            UUID world=knownVisualMaps.get(map);
+            if(world==null){discovered=false;continue;}
+            discovered&=visualQueue.appendPendingRegions(map,world,restoring,allRegions);
+        }
+        displayPendingRegions=discovered?allRegions.size():-1;
         Map<UUID, Boolean> configured = new HashMap<>();
         for (var world : mappedWorlds.entrySet()) {
             Collection<BlueMapMap> maps = world.getValue().getMaps(); configured.put(world.getKey(), !maps.isEmpty());
@@ -626,6 +635,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                 ? visualQueue.restorationPending(maps) : visualQueue.pending(maps);
     }
     @Override public int pending() { return ledger.regions() + visiblePalettePending(); }
+    @Override public int pendingRegions(){return displayPendingRegions;}
     @Override public String status() { return detail; }
     @Override public String summary() { return brief; }
     @Override public void close() {

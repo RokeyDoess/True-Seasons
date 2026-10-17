@@ -54,11 +54,12 @@ final class CommandOutput {
     private void map(CommandSender sender){
         int pending=plugin.integrations().pending();
         Component row=label("BlueMap: ").append(value(plugin.integrations().summary(),pending>0?NamedTextColor.GOLD:NamedTextColor.GREEN));
-        if(pending>0)row=row.append(label(" · ")).append(value(pending+" regions pending",NamedTextColor.GOLD));
+        if(pending>0)row=row.append(label(" · ")).append(value(mapPending(),NamedTextColor.GOLD));
         sender.sendMessage(row.hoverEvent(Component.text(plugin.integrations().status(),NamedTextColor.GRAY)));
     }
     Component progressUpdate(){
         Component row=header("Migration status").append(label(" · "));
+        if(plugin.state().paused)row=row.append(value(pauseReason(),NamedTextColor.YELLOW)).append(label(" · "));
         if(indexing())row=row.append(label("reading saved progress"));
         else {
             long done=0,total=0;double partial=0;
@@ -70,10 +71,18 @@ final class CommandOutput {
             }
         }
         int pending=plugin.integrations().pending();
-        return row.append(label(" · BlueMap: ")).append(value(pending>0?pending+" regions pending":plugin.integrations().summary(),pending>0?NamedTextColor.GOLD:NamedTextColor.GREEN));
+        return row.append(label(" · BlueMap: ")).append(value(pending>0?mapPending():plugin.integrations().summary(),pending>0?NamedTextColor.GOLD:NamedTextColor.GREEN));
+    }
+    private String mapPending(){int regions=plugin.integrations().pendingRegions();return regions>0?regions+" regions pending":"updates pending";}
+    private String pauseReason(){return plugin.state().pauseReason==null||plugin.state().pauseReason.isBlank()
+        ?"Saved pause; reason unavailable in the older build.":plugin.state().pauseReason;}
+    private void pauseDetails(CommandSender sender){
+        if(plugin.state().paused)sender.sendMessage(label("Pause: ").append(value(pauseReason(),NamedTextColor.YELLOW))
+            .append(label(" · ")).append(value("/ts migration resume",NamedTextColor.AQUA)));
     }
     void overview(CommandSender sender){
         sender.sendMessage(header("Season status"));
+        pauseDetails(sender);
         long done=0,total=0,errors=0;double partial=0;
         for(var job:plugin.engine().jobs()){done+=job.completed();total+=job.total();errors+=job.errors();partial+=job.total()*job.percent();}
         Component progress=indexing()?label("reading saved progress"):ratio(done,total,total==0?100:partial/total);
@@ -85,6 +94,7 @@ final class CommandOutput {
     }
     void migration(CommandSender sender,boolean details,boolean cleanup){
         sender.sendMessage(header(cleanup?"Cleanup status":"Migration status"));
+        pauseDetails(sender);
         sender.sendMessage(tps().append(label(" | ")).append(value("center-outward region order",NamedTextColor.GRAY)));
         for(var job:plugin.engine().jobs()){
             Component row=value(job.world.getName(),NamedTextColor.GOLD).append(label(": "));

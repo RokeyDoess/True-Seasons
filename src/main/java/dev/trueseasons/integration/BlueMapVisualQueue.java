@@ -111,6 +111,17 @@ final class BlueMapVisualQueue implements AutoCloseable {
     int pending() {
         return pending(maps.keySet());
     }
+    /** Add actual world coordinates, collapsing overlaps between maps and terrain. Never wait for discovery. */
+    boolean appendPendingRegions(String map,UUID world,boolean restoring,Set<RenderLedger.Region> target){
+        MapState state=maps.get(map);if(state==null)return true;
+        collectReceipt(state);
+        if(state.discovery!=null){
+            if(!state.discovery.isDone()||state.discovery.isCompletedExceptionally())return false;
+            regions(map);
+        }
+        for(Vector2i region:state.regions)target.add(new RenderLedger.Region(world,region.getX(),region.getY()));
+        return !restoring||state.target.equals("vanilla")||!state.regions.isEmpty();
+    }
     int pending(Collection<String> relevantMaps) {
         int count = 0;
         for (String map : relevantMaps) {

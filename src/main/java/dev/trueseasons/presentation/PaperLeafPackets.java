@@ -11,6 +11,7 @@ import io.netty.buffer.*;
 /** Viewer-local originals and appearances. All terrain comes from outgoing packets. */
 public final class PaperLeafPackets {
     private static final int MAX_TREE_STATES=2_000_000;
+    private static final int MAX_MISSING_CHUNKS=64;
     final NativeLeafRegistry registry;
     private final Field buffer, heightmaps, entities, extras, sectionPos, positions, updateStates;
     private final Constructor<?> dataConstructor, chunkConstructor, blockConstructor, sectionConstructor;
@@ -38,6 +39,7 @@ public final class PaperLeafPackets {
     private static final class Chunk {
         final int x,z,minY,maxY;
         final Int2IntOpenHashMap original=new Int2IntOpenHashMap(), shown=new Int2IntOpenHashMap();
+        final Set<Long> missing=new HashSet<>();
         boolean complete=true;
         int[][] biomes;
         byte[][] rawBiomes;
@@ -46,8 +48,10 @@ public final class PaperLeafPackets {
     }
     public final class View {
         private final Map<Long,Chunk> chunks=new HashMap<>();
-        private final ArrayDeque<Long> pending=new ArrayDeque<>();
-        private final Set<Long> queued=new HashSet<>();
+        private final Set<Long> pending=new LinkedHashSet<>(), repairs=new LinkedHashSet<>();
+        private final Map<Long,Set<Long>> waiting=new HashMap<>();
+        private final Set<Long> broadWaiters=new HashSet<>();
+        private Chunk resolving;
         private Context context;
         private AutumnTreeColors.Session session;
         private boolean clearAfterRestore;
@@ -65,15 +69,34 @@ public final class PaperLeafPackets {
             if(context!=null&&(context.seed!=next.seed||context.minY!=next.minY||context.maxY!=next.maxY))clear();
             context=next;invalidate();chunks.keySet().forEach(this::queue);
         }
-        public void clear(){chunks.clear();pending.clear();queued.clear();storedStates=0;session=null;clearAfterRestore=false;}
+        public void clear(){chunks.clear();pending.clear();repairs.clear();waiting.clear();broadWaiters.clear();storedStates=0;session=null;clearAfterRestore=false;}
         private void invalidate(){session=null;}
-        private void queue(long key){if(chunks.containsKey(key)&&queued.add(key))pending.addLast(key);}
+        private void queue(long key){if(chunks.containsKey(key)&&!repairs.contains(key))pending.add(key);}
+        private void repair(long key){if(chunks.containsKey(key)){pending.remove(key);repairs.add(key);}}
+        private void missing(long key){
+            if(resolving==null)return;
+            if(resolving.missing.contains(key))return;
+            long owner=PaperBiomePackets.key(resolving.x,resolving.z);
+            if(resolving.missing.size()>=MAX_MISSING_CHUNKS){broadWaiters.add(owner);return;}
+            if(resolving.missing.add(key))waiting.computeIfAbsent(key,k->new HashSet<>()).add(owner);
+        }
+        private void clearMissing(Chunk chunk){
+            long owner=PaperBiomePackets.key(chunk.x,chunk.z);
+            for(long key:chunk.missing){Set<Long> owners=waiting.get(key);if(owners!=null){owners.remove(owner);if(owners.isEmpty())waiting.remove(key);}}
+            chunk.missing.clear();broadWaiters.remove(owner);
+        }
+        private void arrived(long key){
+            Set<Long> owners=waiting.get(key);if(owners!=null)owners.forEach(this::repair);
+            // Unusually large connected builds retain bounded dependency metadata.
+            // Only those exceptional unresolved chunks retry on other arrivals.
+            broadWaiters.forEach(this::repair);
+        }
         private void nearby(int x,int z){for(int dx=-2;dx<=2;dx++)for(int dz=-2;dz<=2;dz++)queue(PaperBiomePackets.key(x+dx,z+dz));}
         private AutumnTreeColors.Kind sample(int x,int y,int z){
             if(context==null)return AutumnTreeColors.Kind.UNKNOWN;
             if(y<context.minY||y>=context.maxY)return AutumnTreeColors.Kind.OTHER;
             Chunk chunk=chunks.get(PaperBiomePackets.key(x>>4,z>>4));
-            if(chunk==null||!chunk.complete)return AutumnTreeColors.Kind.UNKNOWN;
+            if(chunk==null||!chunk.complete){missing(PaperBiomePackets.key(x>>4,z>>4));return AutumnTreeColors.Kind.UNKNOWN;}
             int state=chunk.original.get(chunk.key(x,y,z));return state<0?AutumnTreeColors.Kind.OTHER:registry.kind(state);
         }
         private boolean persistent(int x,int y,int z){
@@ -92,7 +115,12 @@ public final class PaperLeafPackets {
                 public AutumnTreeColors.Kind kindAt(int x,int y,int z){return sample(x,y,z);}
                 public boolean persistentAt(int x,int y,int z){return persistent(x,y,z);}
             });
-            return registry.painted(original,session.appearanceAt((chunk.x<<4)|(key&15),chunk.minY+(key>>8),(chunk.z<<4)|((key>>4)&15)));
+            AutumnTreeColors.Appearance color;
+            resolving=chunk;
+            try{color=session.appearanceAt((chunk.x<<4)|(key&15),chunk.minY+(key>>8),(chunk.z<<4)|((key>>4)&15));}
+            finally{resolving=null;}
+            if(color==AutumnTreeColors.Appearance.ORIGINAL&&session.incomplete())color=registry.appearance(chunk.shown.get(key));
+            return registry.painted(original,color);
         }
         private void shown(Chunk chunk,int key,int original,int painted){if(original==painted)chunk.shown.remove(key);else chunk.shown.put(key,painted);}
         public Object chunk(Object packet) throws ReflectiveOperationException {
@@ -108,9 +136,15 @@ public final class PaperLeafPackets {
                 int[] states=sections.get(section).states();if(states==null)continue;
                 for(int i=0;i<4096;i++)if(registry.relevant(states[i]))source.original.put((section<<12)|i,states[i]);
             }
-            Chunk previous=chunks.remove(key);if(previous!=null)storedStates-=previous.original.size();
+            Chunk previous=chunks.remove(key);if(previous!=null){storedStates-=previous.original.size();clearMissing(previous);}
             if(storedStates+source.original.size()>MAX_TREE_STATES){invalidate();nearby(x,z);return packet;}
-            chunks.put(key,source);storedStates+=source.original.size();invalidate();nearby(x,z);
+            chunks.put(key,source);storedStates+=source.original.size();invalidate();arrived(key);
+            if(previous!=null)nearby(x,z);
+            if(context.autumn&&previous!=null)for(var row:previous.shown.int2IntEntrySet()){
+                int local=row.getIntKey(),before=previous.original.get(local),after=source.original.get(local);
+                if(before>=0&&after>=0&&previous.minY==source.minY&&registry.kind(before).leaves()
+                        &&registry.kind(before).species()==registry.kind(after).species())source.shown.put(local,row.getIntValue());
+            }
             if(!context.autumn)return packet;
             byte[] mapped=LeafWireCodec.write(sections,registry.states.length,(section,index,original)->{
                 int local=(section<<12)|index,painted=appearance(source,local,original);shown(source,local,original,painted);return painted;
@@ -159,14 +193,17 @@ public final class PaperLeafPackets {
             if(old==state||old<0&&!relevant)return chunk;
             if(old>=0){chunk.original.remove(key);storedStates--;}
             if(relevant){if(storedStates<MAX_TREE_STATES){chunk.original.put(key,state);storedStates++;}else chunk.complete=false;}
-            chunk.shown.remove(key);invalidate();nearby(chunk.x,chunk.z);return chunk;
+            if(old<0||!registry.kind(old).leaves()||registry.kind(old).species()!=registry.kind(state).species())chunk.shown.remove(key);
+            invalidate();nearby(chunk.x,chunk.z);return chunk;
         }
-        public void forget(int x,int z){Chunk old=chunks.remove(PaperBiomePackets.key(x,z));if(old!=null){storedStates-=old.original.size();invalidate();nearby(x,z);}}
+        public void forget(int x,int z){long key=PaperBiomePackets.key(x,z);Chunk old=chunks.remove(key);pending.remove(key);repairs.remove(key);if(old!=null){storedStates-=old.original.size();clearMissing(old);invalidate();nearby(x,z);}}
         /** One chunk per ordinary tick; shutdown can explicitly drain remaining restorations. */
         public List<Object> refresh(int budget) throws ReflectiveOperationException {
             List<Object> result=new ArrayList<>();
-            for(int count=0;count<budget&&!pending.isEmpty();count++){
-                long key=pending.removeFirst();queued.remove(key);Chunk chunk=chunks.get(key);if(chunk==null)continue;
+            for(int count=0;count<budget&&pending();count++){
+                Set<Long> next=repairs.isEmpty()?pending:repairs;Iterator<Long> iterator=next.iterator();long key=iterator.next();iterator.remove();
+                Chunk chunk=chunks.get(key);if(chunk==null)continue;
+                clearMissing(chunk);
                 Map<Integer,Short2ObjectOpenHashMap<Object>> updates=new LinkedHashMap<>();
                 IntSet inspect=new IntOpenHashSet(chunk.original.keySet());inspect.addAll(chunk.shown.keySet());
                 for(int local:inspect){int original=chunk.original.get(local);if(original<0)continue;
@@ -178,10 +215,10 @@ public final class PaperLeafPackets {
                 }
                 for(var row:updates.entrySet())result.add(sectionConstructor.newInstance(sectionOf.invoke(null,chunk.x,row.getKey(),chunk.z),row.getValue()));
             }
-            if(pending.isEmpty()&&clearAfterRestore){clear();context=null;}
+            if(!pending()&&clearAfterRestore){clear();context=null;}
             return result;
         }
-        public boolean pending(){return !pending.isEmpty();}
+        public boolean pending(){return !pending.isEmpty()||!repairs.isEmpty();}
         public int retainedStates(){return storedStates;}
     }
     public View view(){return new View();}

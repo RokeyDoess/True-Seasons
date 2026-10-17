@@ -60,9 +60,10 @@ public final class CommandPresentationTests {
         set(state, "managedWorlds", new LinkedHashMap<>()); set(state, "winterVersion", "fixture-winter"); set(state, "winterColumns", 128);
         Settings settings = allocate(Settings.class); set(settings, "playerRadius", 4); set(settings, "minTps", 18.5); set(settings,"enabled",true);
         WeatherService weather = allocate(WeatherService.class); set(weather, "storms", new HashMap<>());
+        int[] displayRegions={3};
         IntegrationAdapter maps = (IntegrationAdapter) Proxy.newProxyInstance(IntegrationAdapter.class.getClassLoader(), new Class<?>[]{IntegrationAdapter.class},
                 (proxy, method, values) -> switch (method.getName()) {
-                    case "summary" -> "updating; waiting for saves"; case "status" -> "connected; 2 render batches; 99 metadata purges; region renders scheduled this run: 15; palette regions pending: 8; waiting for final saves: 3"; case "pending" -> 3; case "cleanupPending" -> 2;
+                    case "summary" -> "updating; waiting for saves"; case "status" -> "connected; 2 render batches; 99 metadata purges; region renders scheduled this run: 15; palette regions pending: 8; waiting for final saves: 3"; case "pending" -> 3;case "pendingRegions"->displayRegions[0]; case "cleanupPending" -> 2;
                     default -> throw new AssertionError("Status must not mutate map requests: " + method.getName());
                 });
         IntegrationManager integrations = allocate(IntegrationManager.class); set(integrations, "blueMap", maps);
@@ -97,6 +98,8 @@ public final class CommandPresentationTests {
         Component live=new CommandOutput(plugin).progressUpdate();
         check(plain(live).startsWith("Migration status")&&!plain(live).contains("\n")&&colored(live,"1 / 2 chunks (50.0%)",NamedTextColor.AQUA),"Live notifications use one compact line with highlighted progress");
         check(plain(live).contains("snow: 50.0%")&&plain(live).contains("BlueMap: 3 regions pending"),"Live notifications retain shared coverage and compact map progress");
+        displayRegions[0]=-1;
+        check(plain(new CommandOutput(plugin).progressUpdate()).contains("BlueMap: updates pending"),"Unknown region discovery never invents a physical region count");displayRegions[0]=3;
         check(command.onTabComplete(sender,null,"trueseasons",new String[]{"migration","no"}).equals(List.of("notify")),"Live notifications are discoverable in command completion");
         messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration","notify"});
         check(messages.size()==1&&plain(messages.getFirst()).contains("available to players in game"),"Console cannot accidentally create a persistent progress subscription");
@@ -146,7 +149,15 @@ public final class CommandPresentationTests {
                                 +messages.stream().map(CommandPresentationTests::plain).toList());
                 check(state.paused==action.equals("pause") && Files.readString(confirmationDirectory.resolve("jobs.yml")).contains("paused: "+state.paused),
                         "Pause and resume feedback corresponds to the persisted migration state");
+                check(state.pauseReason.equals(state.paused?"Paused manually.":""),"Manual pause and resume update the reason with the saved intent");
             }
+            state.paused=true;state.pauseReason="Automatic pause during BlueMap update: disk full";state.save();
+            check(new StateStore(confirmationDirectory).pauseReason.equals(state.pauseReason),"Automatic pause reasons survive restart");
+            messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration"});
+            check(messages.stream().anyMatch(message->plain(message).contains("disk full")&&plain(message).contains("/ts migration resume")),"Migration output explains the pause and its resume command");
+            check(plain(new CommandOutput(plugin).progressUpdate()).contains("disk full"),"Private progress updates also explain a pause");
+            state.pauseReason="";messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"status"});
+            check(messages.stream().anyMatch(message->plain(message).contains("reason unavailable")),"Legacy pauses are clearly distinguished from known failures");state.paused=false;
         } finally {
             Files.deleteIfExists(confirmationDirectory.resolve("jobs.yml.tmp"));
             Files.deleteIfExists(confirmationDirectory.resolve("jobs.yml"));

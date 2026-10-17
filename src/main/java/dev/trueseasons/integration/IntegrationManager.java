@@ -26,6 +26,7 @@ public final class IntegrationManager implements IntegrationAdapter {
     @Override public boolean requiresRecovery(UUID world, int x, int z, String marker) { return blueMap != null && blueMap.requiresRecovery(world, x, z, marker); }
     @Override public void tick() { if (blueMap != null) blueMap.tick(); }
     @Override public int pending() { return blueMap == null ? 0 : blueMap.pending(); }
+    @Override public int pendingRegions() { return blueMap == null ? 0 : blueMap.pendingRegions(); }
     @Override public String status() { return blueMap == null ? "not installed" : blueMap.status(); }
     @Override public String summary() { return blueMap == null ? "not installed" : blueMap.summary(); }
     @Override public void close() { if (blueMap != null) blueMap.close(); }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Keep autumn leaf colors consistent as chunks load, reload and receive block updates.
+- Repair leaves waiting for nearby tree data, including longer branches, with fewer unnecessary color updates.
+- Prioritize nearby snow previews during join and travel catch-up, within the existing shared work limits.
+- Keep terrain migration running when a dying or respawning player's visible chunks are temporarily unavailable.
+- Show saved pause reasons in migration output and notify admins when a world or integration failure pauses migration.
+- Count distinct BlueMap regions across terrain and color updates, including work carried over from an earlier transition.
+
 ## 0.2.0
 
 - Make winter snow appear across unfinished visible terrain and replace diagonal bands with a scattered pattern.

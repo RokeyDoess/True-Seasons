@@ -41,6 +41,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     private String version;
     private long lastCalendar;
     private long lastVisualWorlds;
+    private long lastDisplayFailure;
 
     @Override public void onEnable() {
         try {
@@ -93,17 +94,27 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
             getCommand("trueseasons").setTabCompleter(command);
             Bukkit.getServicesManager().register(TrueSeasonsApi.class, this, this, ServicePriority.Normal);
             Bukkit.getScheduler().runTaskTimer(this, () -> {
+                String stage="season and calendar update";
                 try {
                     if (System.currentTimeMillis() - lastCalendar > 60_000) { refreshSeason(true); lastCalendar = System.currentTimeMillis(); }
                     if (System.currentTimeMillis() - lastVisualWorlds >= 1000) { updateVisualState(); lastVisualWorlds = System.currentTimeMillis(); }
-                    engine.tick(); integrations.tick(); weather.tick(); presentation.tick(); replenishment.tick(); localSnow.tick();
+                    stage="terrain migration";engine.tick();
+                    stage="BlueMap update";integrations.tick();
+                    stage="seasonal weather";weather.tick();
+                    stage="snow replenishment";replenishment.tick();
+                } catch (Exception failure) { pauseAfterFailure(stage,failure); }
+                try {
+                    presentation.tick();localSnow.tick();
                     command.tick(Bukkit.getCurrentTick());
                     // At most once per second while a transition awaits completion.
                     if(Bukkit.getCurrentTick()%20==0&&announcements.pending(version))
                         announcements.complete(version,engine.worldEditsComplete(),integrations.pending());
                 } catch (Exception failure) {
-                    getLogger().log(Level.SEVERE, "Stopping migrations after a state/integration failure", failure);
-                    state.paused = true;
+                    long now=System.nanoTime();
+                    if(lastDisplayFailure==0||now-lastDisplayFailure>=60_000_000_000L){
+                        lastDisplayFailure=now;
+                        getLogger().log(Level.WARNING,"Seasonal display refresh failed; terrain migration remains independent",failure);
+                    }
                 }
             }, 1L, 1L);
             getLogger().info("Current season: " + season + " (" + version + "), zone " + settings.calendar.zone());
@@ -142,6 +153,18 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     }
     public void persist() {
         try { state.save(); } catch (IOException failure) { throw new UncheckedIOException("Cannot persist job intent", failure); }
+    }
+    private void pauseAfterFailure(String stage,Exception failure){
+        String detail=Objects.toString(failure.getMessage(),failure.getClass().getSimpleName()).replace('\n',' ').replace('\r',' ');
+        String reason="Automatic pause during "+stage+": "+detail;
+        if(reason.length()>240)reason=reason.substring(0,237)+"...";
+        boolean changed=!state.paused||!reason.equals(state.pauseReason);
+        state.paused=true;state.pauseReason=reason;
+        if(!changed)return;
+        getLogger().log(Level.SEVERE,reason,failure);
+        try{state.save();}catch(IOException saveFailure){getLogger().log(Level.SEVERE,"Could not save migration pause reason",saveFailure);}
+        if(announcements!=null)try{announcements.paused(reason);}
+        catch(RuntimeException noticeFailure){getLogger().log(Level.WARNING,"Could not deliver the migration pause notice",noticeFailure);}
     }
     private void refreshSeason(boolean migrate) {
         SeasonCalendar.State calendar = settings.calendar.at(Instant.now());
@@ -187,6 +210,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
     public void startCleanup() {
         if (state.cleanup) return;
         state.cleanup = true; state.clean = false; state.paused = false;
+        state.pauseReason="";
         state.meltVersion="";state.meltOrderVersion="";state.meltColumns=0;state.meltStartColumns=0;
         updateVisualState(); persist(); engine.restart(); weather.close(); presentation.tick();
         if(announcements!=null)announcements.cancel();

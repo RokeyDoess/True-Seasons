@@ -1,6 +1,7 @@
 package dev.trueseasons.snow;
 
 import dev.trueseasons.config.Settings;
+import dev.trueseasons.presentation.PlayerChunkVisibility;
 import java.io.IOException;
 import java.util.*;
 import java.util.function.*;
@@ -82,17 +83,22 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
     public void visible(PlayerChunkLoadEvent event){
         Chunk chunk=event.getChunk();
         if(closed||!winterEnabled.test(chunk.getWorld())&&!melting.test(chunk.getWorld()))return;
-        resetVersion();queueFresh(event.getPlayer().getUniqueId(),chunk,true);
+        var player=event.getPlayer();
+        resetVersion();queueFresh(player.getUniqueId(),chunk,true,distance(player,chunk));
     }
     @EventHandler(priority=EventPriority.MONITOR)
     public void quit(PlayerQuitEvent event){fresh.removeViewer(event.getPlayer().getUniqueId());}
     private void resetVersion(){String current=version.get();if(!Objects.equals(current,previousVersion)){clear();previousVersion=current;}}
-    private void queueFresh(UUID viewer,Chunk chunk,boolean arriving){
+    private static int distance(org.bukkit.entity.Player player,Chunk chunk){
+        int x=org.bukkit.Location.locToBlock(player.getX())>>4,z=org.bukkit.Location.locToBlock(player.getZ())>>4;
+        return (int)Math.min(Integer.MAX_VALUE,Math.max(Math.abs((long)chunk.getX()-x),Math.abs((long)chunk.getZ()-z)));
+    }
+    private void queueFresh(UUID viewer,Chunk chunk,boolean arriving,int distance){
         Position pos=position(chunk);
         if(arriving&&previewMissing.test(chunk))checked.remove(pos);
         Long last=checked.get(pos);
         if((last==null||arriving&&System.nanoTime()-last>=REFRESH_NANOS)&&active.test(chunk.getWorld())
-                &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get())))fresh.offer(viewer,pos);
+                &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get())))fresh.offer(viewer,pos,distance);
     }
     public void tick() throws IOException {
         if(closed)return;
@@ -104,7 +110,7 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
             if(!players.isEmpty())Collections.rotate(players,(ticks/20)%players.size());
             Set<Chunk> visible=new LinkedHashSet<>();
             for(var player:players)if(winterEnabled.test(player.getWorld())||melting.test(player.getWorld()))
-                collectVisible(player,visible,maximumChunks,chunk->queueFresh(player.getUniqueId(),chunk,false));
+                collectVisible(player,visible,maximumChunks,chunk->queueFresh(player.getUniqueId(),chunk,false,distance(player,chunk)));
             loaded=List.copyOf(visible);
             Set<Position> keep=new HashSet<>();
             for(Chunk chunk:loaded)if(melting.test(chunk.getWorld())||!snow.isComplete(chunk,current))keep.add(position(chunk));
@@ -132,7 +138,7 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
     }
     static void collectVisible(org.bukkit.entity.Player player,Set<Chunk> visible,int maximum,Consumer<Chunk> observed){
         World world=player.getWorld();
-        for(long key:player.getSentChunkKeys()){
+        for(long key:PlayerChunkVisibility.sent(player)){
             if(visible.size()>=maximum)break;
             int x=(int)key,z=(int)(key>>32);
             // getSentChunks itself resolves wrappers through getChunkAt. Inspect the

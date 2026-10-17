@@ -25,6 +25,8 @@ public interface IntegrationAdapter extends AutoCloseable {
     default boolean requiresRecovery(UUID world, int x, int z, String marker) { return requiresRecovery(world, x, z); }
     void tick();
     int pending();
+    /** Distinct world regions across terrain and map color work; -1 while discovering. */
+    default int pendingRegions(){return pending();}
     String status();
     default String summary(){String text=status();int end=text.indexOf(';');return end<0?text:text.substring(0,end);}
     @Override void close();

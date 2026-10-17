@@ -81,11 +81,13 @@ public final class AutumnTreeColors {
         private final Map<Position, Kind> samples = bounded(SAMPLE_CACHE);
         private final Map<Position, Appearance> colors = bounded(LEAF_CACHE);
         private final Map<Position, Position> anchors = bounded(LOG_CACHE);
+        private boolean incomplete;
         public Session(long worldSeed, Sampler sampler) {
             this.worldSeed = worldSeed; this.sampler = Objects.requireNonNull(sampler);
         }
         public void invalidate() { samples.clear(); colors.clear(); anchors.clear(); }
         public Appearance appearanceAt(int x, int y, int z) {
+            incomplete=false;
             Position position = new Position(x,y,z);
             Kind source = sample(position);
             if (!source.leaves()) return Appearance.ORIGINAL;
@@ -96,13 +98,15 @@ public final class AutumnTreeColors {
             SearchBudget budget = new SearchBudget();
             Position anchor = nearestAnchor(position, source.species(), budget);
             // Incomplete/unavailable searches are deliberately not memoized as completed trees.
-            if (anchor == null && budget.incomplete) return Appearance.ORIGINAL;
+            if (anchor == null && budget.incomplete) { incomplete=true;return Appearance.ORIGINAL; }
             // Intersecting crowns can overwrite the leaf path back to the original tree.
             // Complete, trunkless foliage still participates, just like a planted hedge.
             Appearance color = anchor == null ? decorative(source.species()) : color(anchor, source.species());
             colors.put(position, color);
             return color;
         }
+        /** The last query could not resolve its tree using the currently available bounded samples. */
+        public boolean incomplete(){return incomplete;}
         private Kind sample(Position position) {
             Kind cached = samples.get(position);
             if (cached != null) return cached;

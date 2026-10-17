@@ -56,6 +56,12 @@ public final class SeasonAnnouncements {
         if(state.migrationAnnouncedComplete)return;
         state.migrationAnnouncedComplete=true;persist.run();
     }
+    public void paused(String reason){
+        if(!settings.get().migrationAnnouncements)return;
+        Component message=prefix().append(Component.text("Migration paused: "+reason,NamedTextColor.RED))
+            .append(Component.text(" Check /ts migration.",NamedTextColor.GRAY).clickEvent(ClickEvent.runCommand("/ts migration")));
+        for(Player player:players.get())if(admin(player))player.sendMessage(message);
+    }
     private static boolean admin(Player player){return player.isOp()||player.hasPermission("trueseasons.command.admin");}
     private static Component prefix(){return Component.text("[True Seasons] ",NamedTextColor.GOLD);}
     private static String name(Season season){String key=season.key();return Character.toUpperCase(key.charAt(0))+key.substring(1);}

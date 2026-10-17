@@ -2,13 +2,17 @@
 
 [Back to True Seasons](../README.md)
 
-Setup, settings and administration for True Seasons 0.2.0.
+Setup, settings and administration for True Seasons.
 
 ## Autumn trees
 
 Autumn uses Minecraft's yellow, orange and red poplar leaf appearances. Each tree's color remains stable across reloads. Oak, birch, jungle, acacia, dark oak and mangrove trees participate; cherry always uses red. Spruce, existing poplar, pale oak and azalea retain their normal appearance. Original leaf types, decay and drops stay unchanged. No resource pack is required.
 
 Natural tree colors follow the nearest matching trunk, including through overlapping crowns. Connected logs are treated as one tree. Client colors finish updating as nearby chunks arrive. Unavailable terrain and unusually large structures can retain their original appearance. There is no gradual autumn color transition yet.
+
+Once a leaf's color is resolved, temporary neighboring-chunk loss does not turn it green again. Property updates and chunk resends retain that color while the tree is unavailable, while season changes, biome exclusions and player replacements still take effect.
+
+Leaves waiting for tree data are checked again when the missing chunks arrive, including branches that extend farther across the view. These repairs take priority over routine color refreshes and do not load extra terrain.
 
 Player-placed leaves and hedges change color too, without needing a trunk. Each eligible decorative leaf type has one stable color per world, keeping long hedges consistent. Cherry petals on the ground remain pink; Minecraft has no matching red version to display without a resource pack.
 
@@ -54,6 +58,8 @@ To try winter, run `/ts season set winter`. This choice survives restarts. Use `
 
 Migration output begins with **Migration status**; status and cleanup have their own headers. Progress and important numbers are highlighted, with BlueMap summarized in one row. Hover over that row in game for full map diagnostics. **READING SAVED PROGRESS** means saved progress is still being checked. Changing snow rules or enabled worlds can start a new terrain update; unchanged settings preserve progress.
 
+Paused jobs show their saved reason and the `/ts migration resume` command. A display refresh failure does not pause terrain work. Failures in terrain work or durable integration updates still pause safely and notify admins. Older saved pauses may have no recorded reason.
+
 When a season changes, everyone online sees a short message such as **Winter has begun.** It has no plugin prefix. Admins with `trueseasons.command.admin` and all operators also receive **[True Seasons] Winter migration started. Check /ts migration for more details.** Click the command to view progress. **[True Seasons] Migration complete.** follows when terrain work and queued BlueMap updates finish. Ordinary scans and unchanged restarts do not repeat these notices; cleanup cancels a pending seasonal completion notice.
 
 Disable either audience independently with `announcements.season-start` or `announcements.migration` in `config.yml`, then run `/ts reload`.
@@ -83,6 +89,8 @@ During winter's opening storm, snow appears gradually across the chunks players 
 
 Newly visible chunks get priority when players join, travel or teleport. Snow refreshes share a server-wide allowance and viewers take turns, so catch-up work stays bounded as more players connect. Routine snow updates continue alongside new views.
 
+Fresh preview planning starts with the closest visible chunks for each player before moving outward. This improves nearby catch-up without increasing the work budget; a full view can still take time to finish.
+
 Tune that allowance in `snow.yml` with `presentation.max-chunks-per-tick` (default **64**, range 1–1024) and `presentation.max-block-updates-per-tick` (default **8192**, range 1–131072). Both limits apply across all players, with smaller per-player batches for fairness. Lower values reduce extra update work but make snow catch up more slowly; higher values allow faster multiplayer catch-up at a higher cost. Run `/ts reload` to apply changes. These limits cover winter previews, snow reveals and melting; they do not change terrain migration speed, BlueMap renders or normal chunk packets.
 
 Grass, podzol and mycelium sides follow the same reveal, so hidden snow does not leave white ground textures behind. Saved block properties stay unchanged.
@@ -108,6 +116,8 @@ BlueMap shows the actual saved snow in completed regions. The gradual reveal pla
 **TERRAIN COMPLETE — MAP PENDING** means terrain work has finished and BlueMap is catching up. Keep autosaving enabled and allow BlueMap to render. Frozen or stopped maps keep their updates pending.
 
 The map summary shows pending regions and the main waiting reason. Hover over it in game for full diagnostics. BlueMap's own updates are separate. New terrain or later snow changes can require another render.
+
+The count combines distinct world regions across terrain and color work. A region waiting for both counts once, as do multiple maps of the same world region. Unfinished updates can carry over from an earlier transition; their latest required changes must still finish. While region discovery is incomplete, the summary says updates are pending without inventing a region count.
 
 Season or palette changes also queue color updates for existing map regions. These use the same render limits and wait for terrain changes to finish and save. Unchanged restarts and reloads do not repeat the color pass. BlueMap uses the same autumn tree choices and retains the original world data.
 

@@ -194,7 +194,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         snowOwnership.preview(worldId,x,z,preview);
         World world=Bukkit.getWorld(worldId);if(world==null)return;
         long key=org.bukkit.Chunk.getChunkKey(x,z);
-        for(Player player:world.getPlayers())if(player.isChunkSent(key)){
+        for(Player player:world.getPlayers())if(PlayerChunkVisibility.sent(player,key)){
             Viewer viewer=viewers.get(player.getUniqueId());if(viewer!=null)viewer.handler.dirtySnow(x,z,arriving);
         }
     }
@@ -550,6 +550,9 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 return message.getClass().getConstructor(Iterable.class).newInstance(children);
             }
             if (originalCount == 0) return message;
+            // New source packets must use the latest requested season even when its
+            // bounded repaint task is still waiting behind a joining chunk burst.
+            if(leaves!=null&&!retired)leaves.context(filtered(leafWanted));
             if (packets.isChunk(message)) {
                 Object painted=message;
                 if(leaves!=null&&!retired){painted=leaves.chunk(painted);leafPending=leaves.pending();}

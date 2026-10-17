@@ -13,6 +13,7 @@ public final class BlueMapReliabilityTests {
         assertions++; if (!value) throw new AssertionError(message);
     }
     public static void main(String[] args) throws Exception {
+        regionCounts();
         RenderLedger ledger = new RenderLedger();
         ChunkKey chunk = new ChunkKey(UUID.randomUUID(), -33, -1);
         check(chunk.region().x() == -2 && chunk.region().z() == -1, "Negative region coordinates");
@@ -74,6 +75,45 @@ public final class BlueMapReliabilityTests {
             }
         }
         System.out.println("BlueMap reliability tests passed: " + assertions + " assertions");
+    }
+    private static void regionCounts(){
+        RenderLedger ledger=new RenderLedger();Map<ChunkKey,String> expected=new HashMap<>();
+        UUID[] worlds={new UUID(1,2),new UUID(2,1)};Random random=new Random(736212);
+        for(int step=0;step<12000;step++){
+            ChunkKey key=new ChunkKey(worlds[random.nextInt(2)],random.nextInt(140)-70,random.nextInt(140)-70);
+            String token="revision-"+step;
+            switch(step%6){
+                case 0 -> {ledger.restore(key,token,List.of("surface"));expected.put(key,token);}
+                case 1 -> {ledger.dirty(key);expected.put(key,"");}
+                case 2 -> {
+                    boolean changed=ledger.complete(key,token);
+                    check(changed=="".equals(expected.get(key)),"Only unfinished revisions complete during randomized tracking");
+                    if(changed)expected.put(key,token);
+                }
+                case 3 -> {
+                    String before=expected.getOrDefault(key,"absent");
+                    check(ledger.replaceWithDeletion(new Revision(key,before),token,true),"Source deletion replaces or restores its current revision");
+                    expected.put(key,token);
+                }
+                case 4 -> {
+                    check(!ledger.acknowledge(new Revision(key,"stale"),"surface"),"Stale callbacks cannot change tracking");
+                    check(!ledger.retire(key,List.of("surface","caves")),"Incomplete map receipts keep tracking");
+                }
+                default -> {
+                    String current=expected.get(key);
+                    if(current!=null&&!current.isEmpty()){
+                        ledger.acknowledge(new Revision(key,current),"surface");
+                        check(ledger.retire(key,List.of("surface")),"Fulfilled region member retires");expected.remove(key);
+                    }
+                }
+            }
+            check(ledger.regions()==expected.keySet().stream().map(ChunkKey::region).distinct().count(),"Region count matches distinct remaining chunks across worlds and negative coordinates");
+        }
+        for(var row:new ArrayList<>(expected.entrySet())){
+            ChunkKey key=row.getKey();String token=row.getValue();if(token.isEmpty()){token="final";ledger.complete(key,token);}
+            ledger.acknowledge(new Revision(key,token),"surface");check(ledger.retire(key,List.of("surface")),"Cleanup retires every remaining receipt");
+        }
+        check(ledger.regions()==0&&ledger.entries().isEmpty(),"No region survives the last member's retirement");
     }
     private static void writeChunk(Path folder, int x, int z, int compression, boolean external,
                                    String key, String token, boolean decoy) throws IOException {

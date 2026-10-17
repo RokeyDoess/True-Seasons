@@ -8,19 +8,39 @@ Setup, settings and administration for True Seasons.
 
 Autumn uses Minecraft's yellow, orange and red poplar leaf appearances. Each tree's color remains stable across reloads. Oak, birch, jungle, acacia, dark oak and mangrove trees participate; cherry always uses red. Spruce, existing poplar, pale oak and azalea retain their normal appearance. Original leaf types, decay and drops stay unchanged. No resource pack is required.
 
-Natural tree colors follow the nearest matching trunk, including through overlapping crowns. Connected logs are treated as one tree. Client colors finish updating as nearby chunks arrive. Unavailable terrain and unusually large structures can retain their original appearance. There is no gradual autumn color transition yet.
+Natural tree colors follow the nearest matching trunk, including through overlapping crowns. Connected logs are treated as one tree. Eligible leaves use orange while tree data is unavailable or a structure exceeds the search limits. They resolve to their tree's color as nearby chunks arrive.
 
 Once a leaf's color is resolved, temporary neighboring-chunk loss does not turn it green again. Property updates and chunk resends retain that color while the tree is unavailable, while season changes, biome exclusions and player replacements still take effect.
 
 Leaves waiting for tree data are checked again when the missing chunks arrive, including branches that extend farther across the view. These repairs take priority over routine color refreshes and do not load extra terrain.
 
-Player-placed leaves and hedges change color too, without needing a trunk. Each eligible decorative leaf type has one stable color per world, keeping long hedges consistent. Cherry petals on the ground remain pink; Minecraft has no matching red version to display without a resource pack.
+Player-placed leaves and hedges use orange in autumn without needing a trunk, while cherry leaves stay red. Cherry petals on the ground remain pink; Minecraft has no matching red version to display without a resource pack.
 
 Grass colors still follow the biome palettes in `visuals.yml`. Set `autumn-trees.enabled: false` there to keep ordinary leaf appearances.
 
+### Calendar color transitions
+
+The season's colors arrive during its first seven real days. Grass and biome foliage move through a fixed set of shades; whole autumn trees change at different, stable times. Trees also return to their ordinary appearance at different times when autumn ends. Snowfall and melting continue to follow terrain migration progress separately.
+
+Change `transition.opening-days` in `visuals.yml` to adjust the window, or use `0` for immediate colors. A window longer than the season is limited to that season's length. `/ts season set` applies the final colors immediately; `/ts season sync` returns to the current calendar stage. Downtime skips directly to the current stage.
+
+`/ts migration pause` freezes the saved season, color stage and snow coverage, including across restarts. Resume keeps a manual target or resynchronizes calendar mode to the current date. Resume before changing seasons. `/ts status` shows color progress while an opening transition is active.
+
+BlueMap shows the full seasonal colors and receives no extra renders for the intermediate shades. Players receive the fixed shades when they connect, adding some initial join data. The server shares prepared palettes across joins while keeping outgoing client data independent. Disabling the opening window omits its unused shades from joining clients. Existing terrain and leaves are never rewritten for color transitions.
+
+### Spring blossoms and summer fireflies
+
+About one third of oak, birch and dark oak trees display Minecraft's flowering azalea leaves in spring. The selection stays fixed throughout the season and across restarts. Whole trees blossom and return to normal at different times during the calendar's opening window. Decorative and unresolved foliage keeps its ordinary spring appearance; cherry trees already have blossoms, and evergreen and tropical tree types stay unchanged.
+
+Blossoms change appearance only. Leaves keep their saved type, properties, decay and drops, and BlueMap shows the same spring selection. Set `spring-blossoms.enabled: false` in `visuals.yml` to disable them. Changing this setting does not require clients to receive new biome colors.
+
+Summer adds sparse native fireflies at dusk and night, near land beside water or sheltered vegetation. Oceans, caves, rain and summer-exempt cold biomes are excluded. There are no new entities, extra pollen or petal particles, or saved world changes. Sounds are off by default.
+
+Control fireflies in `ambience.yml`. Their sampling attempts and particles share a server-wide allowance across players, including failed habitat checks. The defaults allow 16 attempts and at most eight particles once per second, within 24 blocks of players. Work pauses below the configured TPS threshold and samples only loaded chunks. Fireflies have their own toggle and do not depend on seasonal weather being enabled.
+
 ## Install
 
-Tested with **Paper 26.3, builds 177 and 181**, **Java 25**, and optional **BlueMap 5.29**. Other versions have not been verified. BlueMap is optional.
+Tested with **Paper 26.3, builds 177, 181 and 200**, **Java 25**, and optional **BlueMap 5.29**. Other versions have not been verified. BlueMap is optional.
 
 1. Download the jar from [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 2. Stop your server normally and back up your world.
@@ -47,8 +67,8 @@ To try winter, run `/ts season set winter`. This choice survives restarts. Use `
 | `/ts migration` | Show progress and the active region for each world. |
 | `/ts migration details` | Add snow catch-up, refresh workload and detailed terrain counters. |
 | `/ts migration notify` | Toggle private progress updates every five seconds. |
-| `/ts migration pause` | Pause terrain updates. |
-| `/ts migration resume` | Continue paused updates. |
+| `/ts migration pause` | Pause terrain updates and seasonal color progress. |
+| `/ts migration resume` | Continue paused updates; calendar mode catches up to the current date. |
 | `/ts season set <spring\|summer\|autumn\|winter>` | Choose a season. |
 | `/ts season sync` | Return to the calendar. |
 | `/ts reload` | Apply edited settings. |
@@ -82,6 +102,7 @@ Terrain migration controls are in `config.yml`: `migration.max-chunks-per-tick`,
 | `weather.yml` | Winter's introductory storm and seasonal rain/thunder frequency. |
 | `integrations.yml` | BlueMap updates. |
 | `visuals.yml` | Seasonal grass and leaf colors. |
+| `ambience.yml` | Summer fireflies and their shared limits. |
 
 Snow covers exposed, supporting surfaces by default. A surface whitelist is optional. Climate exclusions match parts of biome names and can be changed in `config.yml`. Additional winter exclusions belong in `snow.yml`.
 

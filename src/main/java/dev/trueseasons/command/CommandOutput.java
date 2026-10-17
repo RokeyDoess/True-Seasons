@@ -83,6 +83,9 @@ final class CommandOutput {
     void overview(CommandSender sender){
         sender.sendMessage(header("Season status"));
         pauseDetails(sender);
+        var visual=plugin.visualState();
+        if(visual!=null&&!visual.eligibleWorlds().isEmpty()&&visual.colors().progress()<256)
+            sender.sendMessage(label("Seasonal colors: ").append(value(String.format(Locale.ROOT,"%.1f%%",visual.colors().progress()*100.0/256),NamedTextColor.AQUA)).append(label(" · calendar transition")));
         long done=0,total=0,errors=0;double partial=0;
         for(var job:plugin.engine().jobs()){done+=job.completed();total+=job.total();errors+=job.errors();partial+=job.total()*job.percent();}
         Component progress=indexing()?label("reading saved progress"):ratio(done,total,total==0?100:partial/total);

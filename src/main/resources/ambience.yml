@@ -1,0 +1,10 @@
+# Native client particles only. No entities, terrain changes or map renders.
+fireflies:
+  enabled: true
+  # Work is shared across all players, with viewers taking turns.
+  interval-ticks: 20
+  attempts-per-tick: 16
+  max-particles-per-tick: 8
+  radius-blocks: 24
+  # Optional native firefly-bush ambience. Off by default.
+  sounds: false

@@ -16,6 +16,7 @@ import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.IntPredicate;
 import dev.trueseasons.visual.SeasonVisualResolver;
+import dev.trueseasons.visual.SeasonColorFrame;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import org.bukkit.*;
@@ -32,6 +33,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private final Supplier<SeasonClimatePolicy> climate;
     private final Function<World, Season> colors;
     private final Supplier<SeasonVisualResolver> visuals;
+    private Supplier<SeasonColorFrame> colorFrames=()->null;
+    public void colorFrameSource(Supplier<SeasonColorFrame> frames){colorFrames=Objects.requireNonNull(frames);}
     private final PaperBiomePackets packets;
     private final PaperLeafPackets leafPackets;
     private final PaperSnowPackets snowPackets;
@@ -160,8 +163,12 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private PaperLeafPackets.Context leafContext(World world) {
         SeasonVisualResolver resolver = visuals.get();
         Season season = colors.apply(world);
+        SeasonColorFrame frame=colorFrames.get();
+        int autumn=season==null?0:frame!=null&&frame.to()==season?frame.autumnCoverage():season==Season.AUTUMN?256:0;
+        int spring=season==null?0:frame!=null&&frame.to()==season?frame.springCoverage():season==Season.SPRING?256:0;
         return new PaperLeafPackets.Context(world.getSeed(), world.getMinHeight(), world.getMaxHeight(),
-            resolver != null && resolver.enabled() && resolver.autumnTrees() && season == Season.AUTUMN);
+            resolver != null && resolver.enabled() && resolver.autumnTrees() && autumn>0,autumn,
+            resolver!=null&&resolver.enabled()&&resolver.springBlossoms()?spring:0,season==Season.SPRING);
     }
     private void refreshLeafWorlds() {
         if (leafPackets == null) return;
@@ -227,6 +234,9 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         if (!viewer.channel.isActive()) return false;
         boolean desired = !closed && winter.test(player.getWorld());
         Season desiredColors = closed ? null : colors.apply(player.getWorld());
+        SeasonColorFrame targetFrame=colorFrames.get();
+        SeasonColorFrame desiredFrame=desiredColors==null?null:targetFrame!=null&&targetFrame.to()==desiredColors?targetFrame:SeasonColorFrame.settled(desiredColors);
+        if(desiredFrame!=null)desiredFrame=desiredFrame.palette();
         SeasonClimatePolicy policy = climate.get();
         SeasonVisualResolver nextVisuals = visuals.get();
         viewer.handler.requestLeaves(leafContext(player.getWorld()));
@@ -242,7 +252,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             player.sendMessage("TrueSeasons: please reconnect once to load the changed seasonal colors.");
         }
         if (viewer.handler.originalCount > 0 && nextVisuals != null
-                && !nextVisuals.equals(viewer.handler.deliveredVisuals) && !viewer.handler.reconfigurationRequested) {
+                && (viewer.handler.deliveredVisuals==null||!nextVisuals.registryFingerprint().equals(viewer.handler.deliveredVisuals.registryFingerprint())) && !viewer.handler.reconfigurationRequested) {
             if (!nextVisuals.equals(viewer.handler.failedVisuals)) {
                 viewer.handler.reconfigurationRequested = true;
                 viewer.handler.reconfigurationStarted = false;
@@ -252,12 +262,15 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             }
         }
         if (viewer.handler.requested == desired && viewer.handler.requestedColors == desiredColors
+                && Objects.equals(viewer.handler.requestedColorFrame,desiredFrame)
                 && policy.equals(viewer.handler.requestedPolicy)) return scheduled;
         viewer.handler.requested = desired;
         viewer.handler.requestedColors = desiredColors;
+        viewer.handler.requestedColorFrame=desiredFrame;
         viewer.handler.requestedPolicy = policy;
         Viewer current = viewer;
-        current.channel.eventLoop().execute(() -> current.handler.setPresentation(desired, desiredColors, policy));
+        SeasonColorFrame paletteFrame=desiredFrame;
+        current.channel.eventLoop().execute(() -> current.handler.setPresentation(desired, desiredColors, policy,paletteFrame));
         return scheduled;
     }
     private Viewer recoverViewer(Player player) {
@@ -335,6 +348,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private volatile boolean requested;
         private volatile SeasonClimatePolicy requestedPolicy;
         private volatile Season requestedColors;
+        private volatile SeasonColorFrame requestedColorFrame;
         private volatile SeasonVisualResolver deliveredVisuals;
         private volatile boolean reconfigurationRequested;
         private volatile boolean reconfigurationStarted;
@@ -342,6 +356,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private SeasonVisualResolver failedVisuals;
         private final Supplier<SeasonVisualResolver> visuals;
         private Season colors;
+        private SeasonColorFrame colorFrame;
         private SeasonClimatePolicy policy;
         private List<String> biomeKeys = List.of();
         private boolean[] allowed = new boolean[0];
@@ -382,7 +397,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             if(!base.equals(leafBase)||leafFilter!=autumnAllowed){
                 leafBase=base;leafFilter=autumnAllowed;
                 IntPredicate nativeFilter=autumnAllowed;
-                leafFiltered=new PaperLeafPackets.Context(base.seed(),base.minY(),base.maxY(),base.autumn(),id->nativeFilter.test(id)&&base.autumnBiomeAllowed().test(id));
+                leafFiltered=new PaperLeafPackets.Context(base.seed(),base.minY(),base.maxY(),base.autumn(),id->nativeFilter.test(id)&&base.autumnBiomeAllowed().test(id),base.autumnCoverage(),base.springCoverage(),base.springFirst());
             }
             return leafFiltered;
         }
@@ -460,7 +475,10 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 boolean snowy = winter && winterBiome(id);
                 boolean colored = colors != null && deliveredVisuals != null && deliveredVisuals.enabled()
                     && policy.applies(colors, biomeKeys.get(id));
-                mapping[id] = id + originalCount * (colored ? snowy && colors == Season.WINTER ? 6 : 2 + colors.ordinal() : snowy ? 1 : 0);
+                SeasonColorFrame frame=colorFrame==null&&colors!=null?SeasonColorFrame.settled(colors):colorFrame;
+                if(colored&&!deliveredVisuals.gradualColors())frame=SeasonColorFrame.settled(colors);
+                if(colored&&frame.paletteStep()==0&&!policy.applies(frame.from(),biomeKeys.get(id)))colored=false;
+                mapping[id] = id + originalCount * (colored ? PaperBiomePackets.colorBank(frame,snowy) : snowy ? 1 : 0);
             }
         }
         @Override public void handlerAdded(ChannelHandlerContext context) { this.context = context; }
@@ -486,11 +504,16 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             setPresentation(desired, colors, next);
         }
         public void setPresentation(boolean desired, Season colorSeason, SeasonClimatePolicy next) {
+            setPresentation(desired,colorSeason,next,colorSeason==null?null:SeasonColorFrame.settled(colorSeason));
+        }
+        public void setPresentation(boolean desired,Season colorSeason,SeasonClimatePolicy next,SeasonColorFrame frame){
+            if(colorSeason!=null&&(frame==null||frame.to()!=colorSeason))throw new IllegalArgumentException("Color frame must match the season");
             boolean changed = !policy.equals(next);
-            if (winter == desired && colors == colorSeason && !changed) return;
+            if (winter == desired && colors == colorSeason && Objects.equals(colorFrame,frame) && !changed) return;
             if (changed) { policy = next; rebuildClimate(); }
             winter = desired;
             colors = colorSeason;
+            colorFrame=frame;
             rebuildMapping();
             if (configuring || originalCount == 0 || originals.isEmpty() || context == null || !context.channel().isActive()) return;
             try {

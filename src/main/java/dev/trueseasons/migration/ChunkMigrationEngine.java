@@ -374,6 +374,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     public boolean worldFinished(World world) { Job job=jobs.get(world.getUID()); return job!=null&&job.finished(); }
     public int globalCoverageColumns() { return plugin.state().winterVersion.equals(plugin.version())?plugin.state().winterColumns:0; }
     private void updateCoverage() {
+        if(plugin.state().paused)return;
         boolean melting=plugin.melting();
         if(plugin.state().cleanup||plugin.state().clean||(!melting&&plugin.currentSeason()!=Season.WINTER)
                 ||melting&&plugin.state().meltColumns==0||!melting&&globalCoverageColumns()>=256)return;

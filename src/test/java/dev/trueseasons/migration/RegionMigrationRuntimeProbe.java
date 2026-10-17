@@ -29,6 +29,7 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
     private Field flightsField;
     private Object mapIntegration;
     private long springRenders;
+    private boolean colorClockChecked;
     private Path phaseFile = Path.of("region-probe-phase.txt");
     private YamlConfiguration data;
     @Override public void onEnable() {
@@ -100,6 +101,11 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
             if (!seasons.engine().allFinished() || seasons.state().cleanup || seasons.integrations().pending()!=0) return;
             // Saved-world indexing can finish before BlueMap's asynchronous resource load.
             if(!seasons.integrations().status().startsWith("connected"))return;
+            if(!colorClockChecked){
+                checks+=dev.trueseasons.presentation.SeasonColorClockRuntimeProbe.verify(seasons);
+                checks+=dev.trueseasons.presentation.NativeSnowRuntimeProbe.verify(this);
+                colorClockChecked=true;return;
+            }
             check(seasons.integrations().status().startsWith("connected"), "Real BlueMap connected");
             Set<ChunkPos> headers = new HashSet<>(new GeneratedChunkIndex().scan(world.getWorldPath().resolve("region")));
             data.set("headers",headers.stream().map(p -> p.x()+","+p.z()).sorted().toList());

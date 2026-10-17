@@ -32,9 +32,13 @@ public final class PaperLeafPackets {
         for(int i=0;i<registry.states.length;i++)stateIds.put(registry.states[i],i);
     }
     private static final IntPredicate ALL_BIOMES=id->true;
-    public record Context(long seed,int minY,int maxY,boolean autumn,IntPredicate autumnBiomeAllowed) {
+    public record Context(long seed,int minY,int maxY,boolean autumn,IntPredicate autumnBiomeAllowed,int autumnCoverage,int springCoverage,boolean springFirst) {
+        public Context(long seed,int minY,int maxY,boolean autumn,IntPredicate allowed,int coverage){this(seed,minY,maxY,autumn,allowed,coverage,0,false);}
+        public Context(long seed,int minY,int maxY,boolean autumn,IntPredicate allowed){this(seed,minY,maxY,autumn,allowed,256);}
+        public Context(long seed,int minY,int maxY,boolean autumn,int coverage){this(seed,minY,maxY,autumn,ALL_BIOMES,coverage);}
+        public Context(long seed,int minY,int maxY,boolean autumn,int coverage,int spring,boolean first){this(seed,minY,maxY,autumn,ALL_BIOMES,coverage,spring,first);}
         public Context(long seed,int minY,int maxY,boolean autumn){this(seed,minY,maxY,autumn,ALL_BIOMES);}
-        public Context { Objects.requireNonNull(autumnBiomeAllowed); }
+        public Context { Objects.requireNonNull(autumnBiomeAllowed);if(autumnCoverage<0||autumnCoverage>256||springCoverage<0||springCoverage>256)throw new IllegalArgumentException("Invalid tree coverage"); }
     }
     private static final class Chunk {
         final int x,z,minY,maxY;
@@ -67,7 +71,8 @@ public final class PaperLeafPackets {
             clearAfterRestore=false;
             if(Objects.equals(context,next))return;
             if(context!=null&&(context.seed!=next.seed||context.minY!=next.minY||context.maxY!=next.maxY))clear();
-            context=next;invalidate();chunks.keySet().forEach(this::queue);
+            // A color-stage change does not change any original tree samples or anchors.
+            context=next;chunks.keySet().forEach(this::queue);
         }
         public void clear(){chunks.clear();pending.clear();repairs.clear();waiting.clear();broadWaiters.clear();storedStates=0;session=null;clearAfterRestore=false;}
         private void invalidate(){session=null;}
@@ -105,22 +110,36 @@ public final class PaperLeafPackets {
             int state=chunk.original.get(chunk.key(x,y,z));return state>=0&&registry.persistent[state];
         }
         private int appearance(Chunk chunk,int key,int original){
-            if(context==null||!context.autumn||!chunk.complete||!registry.kind(original).leaves())return original;
+            if(context==null||!context.autumn&&context.springCoverage==0||!chunk.complete||!registry.kind(original).leaves())return original;
             int section=key>>12,cell=((key>>6)&48)|((key>>4)&12)|((key>>2)&3);
             if(chunk.biomes==null||section>=chunk.biomes.length)return original;
             if(chunk.biomes[section]==null){ByteBuf biome=Unpooled.wrappedBuffer(chunk.rawBiomes[section]);
                 try{chunk.biomes[section]=BiomeWireCodec.readBiomes(biome);}finally{biome.release();}}
-            if(!context.autumnBiomeAllowed.test(chunk.biomes[section][cell]))return original;
+            boolean autumn=context.autumn&&context.autumnBiomeAllowed.test(chunk.biomes[section][cell]);
+            if(!autumn&&context.springCoverage==0)return original;
             if(session==null)session=new AutumnTreeColors.Session(context.seed,new AutumnTreeColors.Sampler(){
                 public AutumnTreeColors.Kind kindAt(int x,int y,int z){return sample(x,y,z);}
                 public boolean persistentAt(int x,int y,int z){return persistent(x,y,z);}
             });
             AutumnTreeColors.Appearance color;
             resolving=chunk;
-            try{color=session.appearanceAt((chunk.x<<4)|(key&15),chunk.minY+(key>>8),(chunk.z<<4)|((key>>4)&15));}
+            try{
+                color=AutumnTreeColors.Appearance.ORIGINAL;
+                if(context.springFirst&&context.springCoverage>0)color=seasonAppearance(chunk,key,true);
+                if(color==AutumnTreeColors.Appearance.ORIGINAL&&autumn)color=seasonAppearance(chunk,key,false);
+                if(color==AutumnTreeColors.Appearance.ORIGINAL&&!context.springFirst&&context.springCoverage>0)color=seasonAppearance(chunk,key,true);
+            }
             finally{resolving=null;}
-            if(color==AutumnTreeColors.Appearance.ORIGINAL&&session.incomplete())color=registry.appearance(chunk.shown.get(key));
             return registry.painted(original,color);
+        }
+        private AutumnTreeColors.Appearance seasonAppearance(Chunk chunk,int key,boolean spring){
+            int x=(chunk.x<<4)|(key&15),y=chunk.minY+(key>>8),z=(chunk.z<<4)|((key>>4)&15);
+            AutumnTreeColors.Appearance color=spring?session.springAppearanceAt(x,y,z,context.springCoverage):session.appearanceAt(x,y,z,context.autumnCoverage);
+            if(session.incomplete()){
+                AutumnTreeColors.Appearance known=registry.appearance(chunk.shown.get(key));
+                if(spring?known==AutumnTreeColors.Appearance.BLOSSOM:known!=AutumnTreeColors.Appearance.ORIGINAL&&known!=AutumnTreeColors.Appearance.BLOSSOM)color=known;
+            }
+            return color;
         }
         private void shown(Chunk chunk,int key,int original,int painted){if(original==painted)chunk.shown.remove(key);else chunk.shown.put(key,painted);}
         public Object chunk(Object packet) throws ReflectiveOperationException {
@@ -140,12 +159,12 @@ public final class PaperLeafPackets {
             if(storedStates+source.original.size()>MAX_TREE_STATES){invalidate();nearby(x,z);return packet;}
             chunks.put(key,source);storedStates+=source.original.size();invalidate();arrived(key);
             if(previous!=null)nearby(x,z);
-            if(context.autumn&&previous!=null)for(var row:previous.shown.int2IntEntrySet()){
+            if((context.autumn||context.springCoverage>0)&&previous!=null)for(var row:previous.shown.int2IntEntrySet()){
                 int local=row.getIntKey(),before=previous.original.get(local),after=source.original.get(local);
                 if(before>=0&&after>=0&&previous.minY==source.minY&&registry.kind(before).leaves()
                         &&registry.kind(before).species()==registry.kind(after).species())source.shown.put(local,row.getIntValue());
             }
-            if(!context.autumn)return packet;
+            if(!context.autumn&&context.springCoverage==0)return packet;
             byte[] mapped=LeafWireCodec.write(sections,registry.states.length,(section,index,original)->{
                 int local=(section<<12)|index,painted=appearance(source,local,original);shown(source,local,original,painted);return painted;
             });

@@ -27,7 +27,7 @@ public final class AutumnLeafPacketTests {
         nativeIds=type("net.minecraft.world.level.block.Block").getField("BLOCK_STATE_REGISTRY").get(null);
         air=defaultId("AIR");stone=defaultId("STONE");birch=defaultId("BIRCH_LEAVES");
         birchLog=defaultId("BIRCH_LOG");spruce=defaultId("SPRUCE_LEAVES");cherry=defaultId("CHERRY_LEAVES");oakLog=defaultId("OAK_LOG");
-        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump();
+        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump(); stagedTree(); springTree();
         System.out.println("Autumn leaf packet tests passed: "+assertions+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -35,7 +35,7 @@ public final class AutumnLeafPacketTests {
         for(int id=0;id<registry.states.length;id++) {
             if(!registry.kind(id).leaves()) continue;
             Map<String,String> original=properties(registry.states[id]);
-            for(var color:List.of(AutumnTreeColors.Appearance.YELLOW,AutumnTreeColors.Appearance.ORANGE,AutumnTreeColors.Appearance.RED)) {
+            for(var color:List.of(AutumnTreeColors.Appearance.YELLOW,AutumnTreeColors.Appearance.ORANGE,AutumnTreeColors.Appearance.RED,AutumnTreeColors.Appearance.BLOSSOM)) {
                 int painted=registry.painted(id,color);
                 check(painted>=0&&painted<registry.states.length,"native variant belongs to registry");
                 check(properties(registry.states[painted]).equals(original),"distance/persistent/waterlogged preserved "+id);
@@ -122,9 +122,9 @@ public final class AutumnLeafPacketTests {
         var view=bridge.view();view.context(new PaperLeafPackets.Context(123,0,16,true));
         Object first=view.chunk(chunk(chunkData(sectionWire(east,4)),1,0));
         int[] client=nativeDecode(LeafWireCodec.read(buffer(call(first,"chunkData")),id->true).getFirst().originalBlocks());
-        check(client[index(0,6,8)]==birch,"unavailable neighboring trunk retains original appearance");
+        check(client[index(0,6,8)]==registry.painted(birch,AutumnTreeColors.Appearance.ORANGE),"unavailable neighboring trunk paints orange immediately");
         view.chunk(chunk(chunkData(sectionWire(west,4)),0,0));drain(view,client,1,0);
-        int colored=client[index(0,6,8)];check(colored!=birch,"neighbor arrival repairs already sent border canopy");
+        int colored=client[index(0,6,8)];check(registry.appearance(colored)==AutumnTreeColors.Appearance.RED,"neighbor arrival replaces temporary orange with the resolved red tree color");
         view.forget(0,0);drain(view,client,1,0);
         check(client[index(0,6,8)]==colored,"neighbor unload preserves an already resolved border color");
         int changed=leafVariant(birch,5,false,true);
@@ -165,9 +165,9 @@ public final class AutumnLeafPacketTests {
             Object packet=view.chunk(chunk(chunkData(sectionWire(source,4)),cx,0));
             if(cx==0)client=nativeDecode(LeafWireCodec.read(buffer(call(packet,"chunkData")),id->true).getFirst().originalBlocks());
             drain(view,client,0,0);
-            if(cx<3)check(client[index(9,9,8)]==birch,"first-load crown waits for missing branch data "+cx);
+            if(cx<3)check(client[index(9,9,8)]==registry.painted(birch,AutumnTreeColors.Appearance.ORANGE),"first-load crown is orange while waiting for missing branch data "+cx);
         }
-        check(client[index(9,9,8)]!=birch,"late distant trunk data repairs the original first-load crown");
+        check(registry.appearance(client[index(9,9,8)])==AutumnTreeColors.Appearance.RED,"late distant trunk data resolves the orange first-load crown to red");
         check(!view.pending(),"completed dependency repair does not keep polling");
         view.context(new PaperLeafPackets.Context(123,0,16,false));drain(view,client,0,0);
         check(client[index(9,9,8)]==birch,"dependency repair retains exact originals for restoration");
@@ -266,13 +266,51 @@ public final class AutumnLeafPacketTests {
             check(id(call(packet,"getBlockState"))==placed,"incremental source packets also use the newest requested context");queued.set(false);
         }finally{channel.finishAndReleaseAll();}
     }
+    private static void stagedTree()throws Exception{
+        int[] source=filled(air);for(int y=0;y<=6;y++)source[index(8,y,8)]=birchLog;
+        for(int x=6;x<=10;x++)for(int z=6;z<=10;z++)if(x!=8||z!=8)source[index(x,6,z)]=birch;
+        var selection=new AutumnTreeColors.Session(123,(x,y,z)->x<0||x>=16||z<0||z>=16?AutumnTreeColors.Kind.UNKNOWN:y<0||y>=16?AutumnTreeColors.Kind.OTHER:registry.kind(source[index(x,y,z)]));
+        var view=bridge.view();view.context(new PaperLeafPackets.Context(123,0,16,true,0));
+        int[] client=nativeDecode(LeafWireCodec.read(buffer(call(view.chunk(chunk(chunkData(sectionWire(source,4)),0,0)),"chunkData")),id->true).getFirst().originalBlocks());
+        for(int direction:new int[]{1,-1})for(int step=0;step<=8;step++){
+            int coverage=direction>0?step*32:256-step*32;
+            view.context(new PaperLeafPackets.Context(123,0,16,true,coverage));drain(view,client,0,0);
+            for(int x=6;x<=10;x++)for(int z=6;z<=10;z++)if(x!=8||z!=8)
+                check(client[index(x,6,z)]==registry.painted(birch,selection.appearanceAt(x,6,z,coverage)),"Native tree packets follow stable whole-tree thresholds in both directions");
+        }
+        check(Arrays.equals(client,source),"Leaving autumn completely restores the exact original crown");
+    }
+    private static void springTree()throws Exception{
+        int[] west=filled(air),east=filled(air);
+        for(int y=0;y<=6;y++)west[index(15,y,8)]=birchLog;
+        east[index(0,6,8)]=birch;west[index(14,6,8)]=birch;
+        long seed=0;
+        for(;;seed++){
+            var selection=new AutumnTreeColors.Session(seed,(x,y,z)->y<0||y>=16||x<0||x>=32||z<0||z>=16?AutumnTreeColors.Kind.OTHER:registry.kind((x<16?west:east)[index(x&15,y,z)]));
+            if(selection.springAppearanceAt(16,6,8,256)==AutumnTreeColors.Appearance.BLOSSOM)break;
+        }
+        var view=bridge.view();view.context(new PaperLeafPackets.Context(seed,0,16,false,0,256,true));
+        Object first=view.chunk(chunk(chunkData(sectionWire(east,4)),1,0));
+        int[] client=nativeDecode(LeafWireCodec.read(buffer(call(first,"chunkData")),id->true).getFirst().originalBlocks());
+        check(client[index(0,6,8)]==birch,"Spring first load preserves leaves until a tree can be resolved");
+        view.chunk(chunk(chunkData(sectionWire(west,4)),0,0));drain(view,client,1,0);
+        check(client[index(0,6,8)]==registry.painted(birch,AutumnTreeColors.Appearance.BLOSSOM),"Neighbor arrival repairs a selected flowering tree with native azalea leaf appearance");
+        view.forget(0,0);drain(view,client,1,0);
+        check(registry.appearance(client[index(0,6,8)])==AutumnTreeColors.Appearance.BLOSSOM,"Already resolved spring blossoms survive missing neighboring tree data");
+        int changed=leafVariant(birch,5,false,true);Object update=view.update(single(16,6,8,changed));client[index(0,6,8)]=id(call(update,"getBlockState"));
+        check(registry.appearance(client[index(0,6,8)])==AutumnTreeColors.Appearance.BLOSSOM&&properties(registry.states[client[index(0,6,8)]]).equals(properties(registry.states[changed])),"Spring updates retain blossoms with newest source properties");
+        view.context(new PaperLeafPackets.Context(seed,0,16,true));drain(view,client,1,0);
+        check(registry.appearance(client[index(0,6,8)])==AutumnTreeColors.Appearance.ORANGE,"An out-of-sequence autumn never retains the spring blossom substitution");
+        view.context(new PaperLeafPackets.Context(seed,0,16,false));drain(view,client,1,0);
+        check(client[index(0,6,8)]==changed,"Season exit restores exact original leaves and latest properties after spring/autumn changes");
+    }
     private static void decorativeAndBiomes()throws Exception{
         int[] source=filled(air);int placed=leafVariant(birch,7,true,false);
         source[index(1,5,1)]=placed;source[index(5,5,1)]=placed;
         var view=bridge.view();view.context(new PaperLeafPackets.Context(99,0,16,true,id->id==1));
         Object packet=view.chunk(chunk(chunkData(sectionWire(source,4)),0,0));
         int[] client=nativeDecode(LeafWireCodec.read(buffer(call(packet,"chunkData")),id->true).getFirst().originalBlocks());
-        check(client[index(1,5,1)]!=placed,"placed birch colors without trunk in eligible biome cell");
+        check(client[index(1,5,1)]==registry.painted(placed,AutumnTreeColors.Appearance.ORANGE),"placed birch uses orange without trunk in eligible biome cell");
         check(client[index(5,5,1)]==placed,"hot biome leaf remains original in adjacent quart cell");
         check(properties(registry.states[client[index(1,5,1)]]).equals(properties(registry.states[placed])),"decorative leaf property preservation");
         Object update=view.update(single(5,5,1,placed));check(id(call(update,"getBlockState"))==placed,"single update respects cached excluded biome");
@@ -350,7 +388,7 @@ public final class AutumnLeafPacketTests {
         try {
             Object registryPacket=biomeRegistry(4);channel.writeOutbound(registryPacket);
             Object expanded=channel.readOutbound();
-            check(((List<?>)call(expanded,"entries")).size()==28,"composite handler supplies seasonal biome registry");
+            check(((List<?>)call(expanded,"entries")).size()==4*PaperBiomePackets.COLOR_BANKS,"composite handler supplies seasonal biome registry");
             check(((List<?>)call(registryPacket,"entries")).size()==4,"source biome registry unchanged");
             handler.setPresentation(false,Season.AUTUMN,SeasonClimatePolicy.ALL);
             Object login=login("minecraft:overworld");channel.writeOutbound(login);

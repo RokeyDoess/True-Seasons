@@ -174,9 +174,23 @@ public final class BlueMapSavedTileTests {
             public AutumnTreeColors.Kind kindAt(int x,int y,int z){return AutumnTreeColors.Kind.BIRCH_LEAVES;}
             public boolean persistentAt(int x,int y,int z){return true;}
         });
+        check(decorativeSelection.appearanceAt(20,8,0)==AutumnTreeColors.Appearance.ORANGE,"decorative hedge uses the agreed orange appearance");
         hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of()));
-        source.put(20,8,0,decorativeSelection.appearanceAt(20,8,0).blockKey()+"[distance=7,persistent=true,waterlogged=false]");
+        source.put(20,8,0,"minecraft:orange_poplar_leaves[distance=7,persistent=true,waterlogged=false]");
         check(Arrays.equals(decorative,render(map,storage,20,0,lowres)),"decorative hedge saved tile exactly matches native selected poplar");
+        source.blocks.clear();source.blocks.putAll(original);
+        hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(id),Map.of(id,1234L)));
+        long springSeed=0;
+        for(;;springSeed++){
+            var springSelection=new AutumnTreeColors.Session(springSeed,(x,y,z)->AutumnTreeColors.kind(source.chunk.getBlockState(x,y,z).getId().toString()));
+            if(springSelection.springAppearanceAt(4,8,0,256)==AutumnTreeColors.Appearance.BLOSSOM)break;
+        }
+        hook.update(new SeasonalVisualState(resolver,Season.SPRING,Set.of(id),Map.of(id,springSeed)));
+        byte[] blossoms=render(map,storage,4,0,lowres);int blossomLow=lowres.get("4,0");
+        hook.update(new SeasonalVisualState(resolver,Season.SPRING,Set.of()));
+        source.put(4,8,0,"minecraft:flowering_azalea_leaves[distance=1,persistent=false,waterlogged=false]");
+        check(Arrays.equals(blossoms,render(map,storage,4,0,lowres)),"Saved spring blossom geometry/materials exactly match native flowering leaves");
+        check(blossomLow==lowres.get("4,0"),"Saved spring lowres color matches native flowering leaves");
         source.blocks.clear();source.blocks.putAll(original);
         hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(id),Map.of(id,1234L)));
         source.biome=(Biome)Proxy.newProxyInstance(Biome.class.getClassLoader(),new Class<?>[]{Biome.class},(proxy,method,arguments)->
@@ -209,10 +223,10 @@ public final class BlueMapSavedTileTests {
         YamlConfiguration config=new YamlConfiguration();config.set("enabled",true);
         for(Season season:Season.values())config.set("palettes.temperate."+season.key(),List.of("9C9657","D98637"));
         Map<String,Long> elapsed=new LinkedHashMap<>();
-        for(String mode:List.of("native","tint-only","autumn-trees")) {
+        for(String mode:List.of("native","tint-only","autumn-trees","spring-blossoms")) {
             config.set("autumn-trees.enabled",mode.equals("autumn-trees"));
             var resolver=new SeasonVisualResolver(config,new SeasonClimatePolicy(SeasonClimatePolicy.HOT,SeasonClimatePolicy.COLD));
-            colors.update(new SeasonalVisualState(resolver,Season.AUTUMN,mode.equals("native")?Set.of():Set.of(world),Map.of(world,1234L)));
+            colors.update(new SeasonalVisualState(resolver,mode.equals("spring-blossoms")?Season.SPRING:Season.AUTUMN,mode.equals("native")?Set.of():Set.of(world),Map.of(world,1234L)));
             Map<String,Integer> lowres=new HashMap<>();
             render(map,storage,0,0,lowres); // Warm up native models and the selected hook path.
             long[] samples=new long[3];
@@ -244,10 +258,10 @@ public final class BlueMapSavedTileTests {
         YamlConfiguration config=new YamlConfiguration();config.set("enabled",true);
         for(Season season:Season.values())config.set("palettes.temperate."+season.key(),List.of("9C9657","D98637"));
         Map<String,Long> elapsed=new LinkedHashMap<>();
-        for(String mode:List.of("native","tint-only","autumn-trees","native-repeat")) {
+        for(String mode:List.of("native","tint-only","autumn-trees","spring-blossoms","native-repeat")) {
             config.set("autumn-trees.enabled",mode.equals("autumn-trees"));
             var resolver=new SeasonVisualResolver(config,new SeasonClimatePolicy(SeasonClimatePolicy.HOT,SeasonClimatePolicy.COLD));
-            colors.update(new SeasonalVisualState(resolver,Season.AUTUMN,mode.startsWith("native")?Set.of():Set.of(world),Map.of(world,1234L)));
+            colors.update(new SeasonalVisualState(resolver,mode.equals("spring-blossoms")?Season.SPRING:Season.AUTUMN,mode.startsWith("native")?Set.of():Set.of(world),Map.of(world,1234L)));
             Map<String,Integer> lowres=new HashMap<>();render(map,storage,chosen.getX(),chosen.getY(),lowres);
             long[] samples=new long[3];
             for(int i=0;i<samples.length;i++){long start=System.nanoTime();render(map,storage,chosen.getX(),chosen.getY(),lowres);samples[i]=System.nanoTime()-start;}

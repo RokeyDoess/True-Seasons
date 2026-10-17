@@ -46,7 +46,7 @@ public final class NativeSnowRuntimeProbe {
             channel.writeOutbound(packet);
             Object rewritten = channel.readOutbound();
             List<?> entries = (List<?>) call(rewritten, "entries");
-            if (entries.size() != 7) throw new AssertionError("Initial configuration handler emitted all color and snow aliases");
+            if (entries.size() != PaperBiomePackets.COLOR_BANKS) throw new AssertionError("Initial configuration handler emitted all fixed color stages and snow aliases");
             if (!((Optional<?>) call(entries.getFirst(), "data")).isEmpty()) throw new AssertionError("Original known-pack entry retained");
             Object data = ((Optional<?>) call(entries.get(1), "data")).orElseThrow();
             if ((float) data.getClass().getMethod("getFloatOr", String.class, float.class).invoke(data, "temperature", 999.0f) != -1.0f) throw new AssertionError("Authoritative missing known-pack payload materialized and cold");
@@ -91,8 +91,28 @@ public final class NativeSnowRuntimeProbe {
             probe.getLogger().info("PASS: Native snowfall actual Paper configuration channel and authoritative known-pack climate materialization");
             probe.getLogger().info("PASS: Disconnecting player is ignored before reconnect warning or seasonal state lookup");
             probe.getLogger().info("PASS: Seasonal palette edits recover when a plugin stack refuses client reconfiguration");
-            return 8;
+            return 8+registryBounds(probe,packets,palettes.get());
         } finally { service.close(); channel.finishAndReleaseAll(); }
+    }
+    private static int registryBounds(JavaPlugin probe,PaperBiomePackets packets,SeasonVisualResolver visuals)throws Exception{
+        Field source=PaperBiomePackets.class.getDeclaredField("authoritative");source.setAccessible(true);
+        var biomes=(Map<?,?>)source.get(packets);List<Object> originals=new ArrayList<>();
+        Constructor<?> entry=type("net.minecraft.core.RegistrySynchronization$PackedRegistryEntry").getConstructor(type("net.minecraft.resources.Identifier"),Optional.class);
+        for(Object key:biomes.keySet())originals.add(entry.newInstance(identifier(key.toString()),Optional.empty()));
+        Object key=type("net.minecraft.resources.ResourceKey").getMethod("createRegistryKey",type("net.minecraft.resources.Identifier")).invoke(null,identifier("minecraft:worldgen/biome"));
+        Object packet=type("net.minecraft.network.protocol.configuration.ClientboundRegistryDataPacket").getConstructor(key.getClass(),List.class).newInstance(key,originals);
+        var expanded=packets.registry(packet,visuals);
+        var raw=io.netty.buffer.Unpooled.buffer();
+        try{
+            Object friendly=type("net.minecraft.network.FriendlyByteBuf").getConstructor(io.netty.buffer.ByteBuf.class).newInstance(raw);
+            Object codec=expanded.packet().getClass().getField("STREAM_CODEC").get(null);Class<?> stream=type("net.minecraft.network.codec.StreamCodec");
+            stream.getMethod("encode",Object.class,Object.class).invoke(codec,friendly,expanded.packet());int bytes=raw.readableBytes();
+            if(bytes>2*1024*1024)throw new AssertionError("Representative native registry exceeded the 2 MiB raw test budget: "+bytes);
+            Object decoded=stream.getMethod("decode",Object.class).invoke(codec,friendly);
+            if(((List<?>)call(decoded,"entries")).size()!=biomes.size()*PaperBiomePackets.COLOR_BANKS)throw new AssertionError("Full real biome registry did not round-trip");
+            probe.getLogger().info("PASS: Full authoritative client registry: "+biomes.size()+" source biomes, "+expanded.registrySize()+" total entries, "+bytes+" uncompressed bytes; native codec round-trip");
+        }finally{raw.release();}
+        return 2;
     }
     private static Class<?> type(String name) throws ClassNotFoundException { return Class.forName(name); }
     private static Object identifier(String id) throws Exception { return type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, id); }

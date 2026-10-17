@@ -1,26 +1,28 @@
 # True Seasons
 
-[![Latest prerelease: v0.2.2](https://img.shields.io/badge/prerelease-v0.2.2-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.2)
+[![Latest prerelease: v0.3.0](https://img.shields.io/badge/prerelease-v0.3.0-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.0)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
-Autumn forests, winter snowstorms, and a world that changes with the calendar.
+Spring blossoms, summer fireflies, autumn forests and winter snowstorms.
 
 True Seasons brings seasons to the world you've already built, using Minecraft's own weather and block appearances. Individual trees turn yellow, orange or red. Winter settles across rooftops, treetops and hillsides, then gives way to melting snow and returning flowers.
 
 **No resource pack. No client mod.** Players join with ordinary Minecraft.
 
-**Latest prerelease: [0.2.2](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.2).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
+**Latest prerelease: [0.3.0](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.0).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 
 ## Seasons that feel like Minecraft
 
+- **Spring in bloom.** A fixed third of suitable oak, birch and dark oak trees blossom each spring. Their original leaves and drops stay unchanged.
+- **Summer after sunset.** Sparse fireflies appear near water and sheltered greenery at dusk and night. Oceans are excluded, and added sounds are off by default.
 - **Autumn from tree to tree.** Oak and birch trees can take on different yellow, orange or red colors within the same forest. Each tree keeps its color between visits. Cherry turns red, spruce stays evergreen, and player-built hedges and decorative leaves join in.
 - **Native snowfall and real snow cover.** Winter rain uses Minecraft's own snowfall. Snow settles on exposed terrain, rooftops and tree canopies, while grass, flowers and leaf litter make way for winter.
 - **A transition you can watch.** Winter's opening storm gradually fills in the snow players see. When winter ends, snow disappears gradually and the plants underneath return. The scenery changes throughout the transition.
 - **Biomes keep their character.** Deserts, jungles and other hot biomes skip winter and autumn effects by default. Cold biomes keep their natural colors through summer.
-- **Your calendar, your seasons.** Follow real-world months in your time zone, customize the calendar, or switch seasons whenever you want.
-- **Seasons on your web map, too.** BlueMap shows seasonal grass, the same autumn tree colors and saved winter snow. True Seasons manages the updates as regions finish, including restoring the map when winter ends.
+- **Your calendar, your seasons.** Colors arrive over the season's opening week, with whole trees changing at different times. Customize the calendar or switch to a season's final colors whenever you want.
+- **Seasons on your web map, too.** BlueMap shows seasonal grass, spring blossoms, autumn trees and saved winter snow. True Seasons combines the updates and skips extra renders for gradual color changes.
 - **Stay in the loop.** Simple season announcements for players, migration notices for admins, and optional private progress updates every five seconds.
 
 ## Made for a world you already care about
@@ -66,7 +68,7 @@ Try `/ts season set winter` to see winter. Use `/ts season sync` to return to th
 | `/ts status` | Get a short overview. |
 | `/ts migration` | Check terrain progress and BlueMap. |
 | `/ts migration notify` | Toggle private progress updates every five seconds. |
-| `/ts migration pause` / `/ts migration resume` | Pause or continue terrain work. |
+| `/ts migration pause` / `/ts migration resume` | Pause or continue terrain and color transitions. |
 | `/ts season set <season>` | Choose spring, summer, autumn or winter. |
 | `/ts season sync` | Follow the calendar again. |
 | `/ts reload` | Apply edited settings. |
@@ -77,7 +79,7 @@ The [server guide](docs/SERVER_GUIDE.md) covers all commands, permissions, setti
 
 - BlueMap shows saved terrain. It can trail the world and will not mirror the gradual snow reveal players see.
 - Newly visible snow catches up within limited update batches. Plants wait for their region's terrain pass before disappearing.
-- Autumn colors currently change without a gradual fade. Some unusually large trees or structures can retain their original appearance.
+- Calendar grass colors change in steps, and whole trees change at different times. Unresolved autumn foliage uses orange; unresolved spring foliage keeps its ordinary appearance.
 - Cherry petals on the ground remain pink.
 - Distant Horizons support is planned.
 

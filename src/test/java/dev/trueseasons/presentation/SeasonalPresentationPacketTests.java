@@ -43,7 +43,7 @@ public final class SeasonalPresentationPacketTests {
         var resolver=resolver();var handler=handler(resolver,leafWorlds,snowWorlds);EmbeddedChannel channel=new EmbeddedChannel(handler);
         try{
             Object registryPacket=biomeRegistry();channel.writeOutbound(registryPacket);Object expanded=channel.readOutbound();
-            check(((List<?>)call(expanded,"entries")).size()==21,"Full pipeline publishes all seven native biome appearances");
+            check(((List<?>)call(expanded,"entries")).size()==3*PaperBiomePackets.COLOR_BANKS,"Full pipeline publishes the bounded seasonal stage registry");
             check(((List<?>)call(registryPacket,"entries")).size()==3,"Original registry remains unchanged");
             handler.setPresentation(false,Season.AUTUMN,POLICY);
             Object login=login("minecraft:overworld");channel.writeOutbound(login);check(channel.readOutbound()==login,"Login selects snow and leaf contexts before first chunk");

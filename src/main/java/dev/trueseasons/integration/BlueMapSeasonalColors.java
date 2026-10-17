@@ -129,8 +129,8 @@ final class BlueMapSeasonalColors implements AutoCloseable {
                     failure = unsupported.getMessage(); throw unsupported;
                 }
                 SeasonalVisualState captured = palette.state;
-                if (captured != null && captured.active(world) && captured.season() == Season.AUTUMN && captured.resolver().autumnTrees()) {
-                    args = args.clone(); args[0] = new AutumnWorld(args[0], captured).proxy;
+                if (captured != null && captured.active(world) && (captured.season() == Season.AUTUMN && captured.resolver().autumnTrees()||captured.season()==Season.SPRING&&captured.resolver().springBlossoms())) {
+                    args = args.clone(); args[0] = new TreeWorld(args[0], captured).proxy;
                 }
             }
             try { return method.invoke(pass, args); }
@@ -142,7 +142,7 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         return pass;
     }
     /** Tile-scoped facade reads only BlueMap's saved-world reader. No Bukkit calls or world writes. */
-    private final class AutumnWorld {
+    private final class TreeWorld {
         final Object source, proxy;
         final Map<Long,Object> originals = new LinkedHashMap<>();
         final Map<Object,Object> chunks = new IdentityHashMap<>();
@@ -154,7 +154,7 @@ final class BlueMapSeasonalColors implements AutoCloseable {
         final AutumnTreeColors.Session trees;
         final SeasonalVisualState visualState;
         final Map<String,Boolean> allowedBiomes=new HashMap<>();
-        AutumnWorld(Object source, SeasonalVisualState visualState) {
+        TreeWorld(Object source, SeasonalVisualState visualState) {
             this.source = source;
             this.visualState = visualState;
             trees = new AutumnTreeColors.Session(visualState.seed(world), new AutumnTreeColors.Sampler(){
@@ -164,7 +164,7 @@ final class BlueMapSeasonalColors implements AutoCloseable {
                     if (!(boolean) chunkGeneratedHandle.invokeExact(chunk)) return AutumnTreeColors.Kind.UNKNOWN;
                     Object state = (Object) chunkStateHandle.invokeExact(chunk,x,y,z);
                     return kind(state);
-                } catch (Throwable failure) { throw new IllegalStateException("Cannot sample saved autumn tree", failure); }
+                } catch (Throwable failure) { throw new IllegalStateException("Cannot sample saved seasonal tree", failure); }
               }
               public boolean persistentAt(int x,int y,int z){
                 try {Object chunk=originalChunk(x,z),state=(Object)chunkStateHandle.invokeExact(chunk,x,y,z);
@@ -206,15 +206,15 @@ final class BlueMapSeasonalColors implements AutoCloseable {
             Object wrapped = chunks.get(chunk);
             if (wrapped != null) return wrapped;
             if (chunks.size() >= 256) chunks.clear();
-            if (!mayHaveAutumnLeaves(chunk)) { chunks.put(chunk,chunk); return chunk; }
+            if (!mayHaveSeasonalLeaves(chunk)) { chunks.put(chunk,chunk); return chunk; }
             wrapped = Proxy.newProxyInstance(chunkClass.getClassLoader(),new Class<?>[]{chunkClass},(object,method,args) -> {
                 if (!method.getName().equals("getBlockState")) return call(method,chunk,args);
                 Object result = (Object) chunkStateHandle.invokeExact(chunk,(int)args[0],(int)args[1],(int)args[2]);
-                if (!kind(result).leaves()) return result;
+                if (!kind(result).leaves()||visualState.season()==Season.SPRING&&!AutumnTreeColors.springEligible(kind(result))) return result;
                 Object biome=(Object)chunkBiomeHandle.invokeExact(chunk,(int)args[0],(int)args[1],(int)args[2]);
                 String biomeName=((Object)biomeKey.invokeExact(biome)).toString();
-                if(!allowedBiomes.computeIfAbsent(biomeName,name->visualState.resolver().applies(Season.AUTUMN,name)))return result;
-                var appearance = trees.appearanceAt((int)args[0],(int)args[1],(int)args[2]);
+                if(!allowedBiomes.computeIfAbsent(biomeName,name->visualState.resolver().applies(visualState.season(),name)))return result;
+                var appearance = visualState.season()==Season.SPRING?trees.springAppearanceAt((int)args[0],(int)args[1],(int)args[2],256):trees.appearanceAt((int)args[0],(int)args[1],(int)args[2]);
                 if (appearance == AutumnTreeColors.Appearance.ORIGINAL) return result;
                 Object[] painted = states.get(result);
                 if (painted == null) {
@@ -226,11 +226,11 @@ final class BlueMapSeasonalColors implements AutoCloseable {
             });
             chunks.put(chunk,wrapped); return wrapped;
         }
-        boolean mayHaveAutumnLeaves(Object chunk) throws Throwable {
+        boolean mayHaveSeasonalLeaves(Object chunk) throws Throwable {
             if (paletteChunkClass == null || chunk.getClass() != paletteChunkClass) return true;
             try {
                 for (Object section : (Object[])chunkSectionsField.get(chunk)) if (section != null)
-                    for (Object state : (Object[])sectionPaletteField.get(section)) if (kind(state).leaves()) return true;
+                    for (Object state : (Object[])sectionPaletteField.get(section)) if (visualState.season()==Season.SPRING?AutumnTreeColors.springEligible(kind(state)):kind(state).leaves()) return true;
                 return false;
             } catch (ReflectiveOperationException | RuntimeException unfamiliar) {
                 // Fail open to ordinary read-only rendering if this optional internal layout changes.

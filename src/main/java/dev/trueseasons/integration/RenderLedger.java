@@ -21,15 +21,19 @@ public final class RenderLedger {
         public boolean cleanup() { return cleanup; }
     }
     private final Map<ChunkKey, Entry> entries = new LinkedHashMap<>();
+    private final Map<Region,Integer> regionMembers = new HashMap<>();
+    private void put(ChunkKey chunk,Entry entry){
+        if(entries.put(chunk,entry)==null)regionMembers.merge(chunk.region(),1,Integer::sum);
+    }
     public Map<ChunkKey, Entry> entries() { return Collections.unmodifiableMap(entries); }
     public void restore(ChunkKey chunk, String token, Collection<String> acknowledged) {
-        entries.put(chunk, new Entry(token, acknowledged));
+        put(chunk, new Entry(token, acknowledged));
     }
     public void cleanup(ChunkKey chunk, boolean value) { entries.get(chunk).cleanup = value; }
     public boolean dirty(ChunkKey chunk) {
         Entry entry = entries.get(chunk);
         if (entry != null && entry.token.isEmpty()) return false;
-        entries.put(chunk, new Entry("", List.of())); return true;
+        put(chunk, new Entry("", List.of())); return true;
     }
     public boolean complete(ChunkKey chunk, String token) {
         Entry entry = entries.get(chunk);
@@ -46,7 +50,7 @@ public final class RenderLedger {
     }
     public boolean replaceWithDeletion(Revision previous, String token, boolean cleanup) {
         if (entries.containsKey(previous.chunk()) && !unchanged(previous)) return false;
-        Entry entry = new Entry(token, List.of()); entry.cleanup = cleanup; entries.put(previous.chunk(), entry); return true;
+        Entry entry = new Entry(token, List.of()); entry.cleanup = cleanup; put(previous.chunk(), entry); return true;
     }
     public boolean requiresMarkerRecovery(ChunkKey chunk, String marker, boolean saved, boolean deleted) {
         return requiresMarkerRecovery(chunk, marker, saved, deleted, true);
@@ -67,7 +71,9 @@ public final class RenderLedger {
     public boolean retire(ChunkKey chunk, Collection<String> maps) {
         Entry entry = entries.get(chunk);
         if (entry == null || entry.token.isEmpty() || maps.isEmpty() || !entry.acknowledged.containsAll(maps)) return false;
-        entries.remove(chunk); return true;
+        entries.remove(chunk);
+        regionMembers.compute(chunk.region(),(region,count)->count==1?null:count-1);
+        return true;
     }
-    public int regions() { return (int) entries.keySet().stream().map(ChunkKey::region).distinct().count(); }
+    public int regions() { return regionMembers.size(); }
 }

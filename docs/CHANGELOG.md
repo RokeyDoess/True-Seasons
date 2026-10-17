@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Ease into calendar colors over the season's opening week, with whole autumn trees changing at different times. Manual season changes remain immediate.
+- Give a fixed third of oak, birch and dark oak trees a spring blossom appearance, in game and on BlueMap. Their original leaves and drops stay unchanged.
+- Add sparse summer fireflies near water and sheltered greenery at dusk and night. Oceans are excluded and added sounds are off by default.
+- Keep all transition progress paused across restarts. Calendar mode catches up to the current date on resume; manual mode keeps its saved target.
+- Reuse prepared colors between joins and avoid extra BlueMap renders for gradual color changes.
+- Use orange for hedges and autumn leaves waiting for nearby tree data. Previously resolved colors stay consistent, and cherry stays red.
+- Reduce repeated work when coloring forests, handling unusually large trees and checking BlueMap progress.
+
 ## 0.2.2
 
 - Reduce background work when discovering saved chunks and checking migration progress on disk.

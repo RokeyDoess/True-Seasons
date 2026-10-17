@@ -18,8 +18,10 @@ public final class Settings {
     public final int playerRadius, snowStepColumns, snowStepTicks, snowPlayerBreakCooldownSeconds;
     public final boolean snowmelt;
     public final SnowPresentationLimits snowPresentation;
+    public final FireflySettings fireflies;
     public final boolean seasonAnnouncements, migrationAnnouncements;
     public final double minTps, millis;
+    public final double colorOpeningDays;
     public final boolean enabled, prioritize, snow, protectSnow, weather, blueMap;
     public final boolean allExposed, snowTransition, winterStorm, winterSnowfall, groundCover;
     public final SeasonClimatePolicy climate;
@@ -29,7 +31,7 @@ public final class Settings {
 
     public Settings(JavaPlugin plugin) throws Exception {
         Map<String, YamlConfiguration> files = new HashMap<>();
-        for (String name : List.of("config", "calendar", "snow", "weather", "visuals", "integrations")) {
+        for (String name : List.of("config", "calendar", "snow", "weather", "visuals", "integrations","ambience")) {
             File file = new File(plugin.getDataFolder(), name + ".yml");
             if (!file.exists()) plugin.saveResource(name + ".yml", false);
             YamlConfiguration yaml = new YamlConfiguration();
@@ -106,6 +108,9 @@ public final class Settings {
                 throw new IllegalArgumentException("Invalid " + kind + " probability");
         }
         visuals = files.get("visuals");
+        fireflies=FireflySettings.read(files.get("ambience"));
+        colorOpeningDays=visuals.getDouble("transition.opening-days",7);
+        if(!Double.isFinite(colorOpeningDays)||colorOpeningDays<0||colorOpeningDays>365)throw new IllegalArgumentException("Color opening days must be 0..365");
         blueMap = integrations.getBoolean("bluemap.enabled", true);
         blueMapSeconds = bounded(integrations.getInt("bluemap.flush-seconds", 30), 5, 86400);
         blueMapRegions = bounded(integrations.getInt("bluemap.max-regions-per-flush", 1), 1, 32);

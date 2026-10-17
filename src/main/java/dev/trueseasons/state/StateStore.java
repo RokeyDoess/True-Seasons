@@ -1,6 +1,7 @@
 package dev.trueseasons.state;
 
 import dev.trueseasons.api.Season;
+import dev.trueseasons.visual.SeasonColorFrame;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
@@ -13,6 +14,9 @@ public final class StateStore {
     public Season override;
     public boolean cleanup, clean, paused;
     public String pauseReason="";
+    public String currentVersion="";
+    public SeasonColorFrame colorFrame;
+    public double pausedCalendarProgress;
     public int revision;
     public String winterVersion="";
     public int winterColumns;
@@ -37,6 +41,10 @@ public final class StateStore {
         cleanup = data.getBoolean("cleanup"); clean = data.getBoolean("clean");
         paused = data.getBoolean("paused"); revision = data.getInt("revision");
         pauseReason=data.getString("pause-reason","");
+        currentVersion=data.getString("current-version","");
+        if(data.contains("colors.target"))colorFrame=new SeasonColorFrame(Season.valueOf(data.getString("colors.from")),Season.valueOf(data.getString("colors.target")),data.getInt("colors.progress"));
+        pausedCalendarProgress=data.getDouble("colors.paused-calendar-progress",0);
+        if(!Double.isFinite(pausedCalendarProgress)||pausedCalendarProgress<0||pausedCalendarProgress>1)throw new IOException("Invalid paused calendar progress");
         winterVersion=data.getString("winter-transition.version","");
         winterColumns=data.getInt("winter-transition.coverage-columns",0);
         if(winterColumns<0||winterColumns>256)throw new IOException("Invalid saved winter coverage");
@@ -56,6 +64,9 @@ public final class StateStore {
         data.set("schema", 1); data.set("override", override == null ? null : override.name());
         data.set("cleanup", cleanup); data.set("clean", clean); data.set("paused", paused);
         data.set("pause-reason",pauseReason);
+        data.set("current-version",currentVersion);
+        if(colorFrame!=null){data.set("colors.from",colorFrame.from().name());data.set("colors.target",colorFrame.to().name());data.set("colors.progress",colorFrame.progress());}
+        data.set("colors.paused-calendar-progress",pausedCalendarProgress);
         data.set("revision", revision);
         data.set("winter-transition.version",winterVersion); data.set("winter-transition.coverage-columns",winterColumns);
         data.set("last-season",lastSeason==null?null:lastSeason.name());

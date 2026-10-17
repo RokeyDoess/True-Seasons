@@ -2,6 +2,14 @@
 # Autumn trees use vanilla colored poplar leaf appearances; spruce stays unchanged.
 # Saved biome IDs and leaf blocks remain untouched.
 enabled: true
+transition:
+  # Real 24-hour days at the start of a calendar season; 0 changes immediately.
+  # Manual season commands always use the final colors.
+  opening-days: 7
+spring-blossoms:
+  # About one third of oak, birch and dark oak trees use native flowering leaves.
+  # The same trees bloom throughout spring; decorative leaves stay unchanged.
+  enabled: true
 autumn-trees:
   # Client/render-only appearance. Saved leaves, decay and drops stay original.
   # Birch participates; cherry always uses red. No resource pack required.

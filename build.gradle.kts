@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.2.2"
+version = "0.3.0"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -60,7 +60,9 @@ listOf(
     "blueMapJournalTest" to "dev.trueseasons.integration.BlueMapJournalTests",
     "blueMapSeasonalColorsTest" to "dev.trueseasons.integration.BlueMapSeasonalColorsTests",
     "blueMapVisualQueueTest" to "dev.trueseasons.integration.BlueMapVisualQueueTests",
-    "autumnTreeColorsTest" to "dev.trueseasons.visual.AutumnTreeColorsTests"
+    "autumnTreeColorsTest" to "dev.trueseasons.visual.AutumnTreeColorsTests",
+    "seasonColorTransitionTest" to "dev.trueseasons.visual.SeasonColorTransitionTests",
+    "fireflyTest" to "dev.trueseasons.ambience.FireflyTests"
 ).forEach { (taskName, entryPoint) ->
     tasks.register<JavaExec>(taskName) {
         dependsOn(tasks.testClasses)

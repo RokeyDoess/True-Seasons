@@ -16,7 +16,7 @@ public final class NativeSnowPacketTests {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
-        registryAndClimate(); palettesAndRefresh(); climateExclusions(); seasonalColors();
+        registryAndClimate(); palettesAndRefresh(); climateExclusions(); seasonalColors(); registryCaching();
         System.out.println("Native snow packet tests passed: " + assertions + " assertions");
         Class.forName("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -158,7 +158,7 @@ public final class NativeSnowPacketTests {
         channel.writeOutbound(registry(List.of(entry("minecraft:forest", Optional.of(forest)),
             entry("minecraft:desert", Optional.of(desert)), entry("minecraft:snowy_plains", Optional.of(frozen)))));
         List<?> entries = (List<?>) call(wireRoundTrip(channel.readOutbound()), "entries");
-        check(entries.size() == 21, "All seasonal banks and native snow banks fit the configured client registry");
+        check(entries.size() == 3*PaperBiomePackets.COLOR_BANKS, "All fixed seasonal stages fit the configured client registry");
         check(forest.equals(copy), "Color preparation never mutates the authoritative biome payload");
         for (Season season : Season.values()) {
             Object colored = decodeBiome(((Optional<?>) call(entries.get((2 + season.ordinal()) * 3), "data")).orElseThrow());
@@ -178,7 +178,7 @@ public final class NativeSnowPacketTests {
         handler.setPresentation(false,Season.AUTUMN,policy);
         Object autumn=channel.readOutbound();int[] autumnIds=ids(autumn);
         for(int i=0;i<64;i++)check(autumnIds[i]==original[i]+(original[i]==1?0:12),"Autumn tint routing preserves hot biomes "+i);
-        check(Arrays.equals(autumnIds,nativeIds(autumn,21)),"Vanilla palette accepts the enlarged seasonal registry");
+        check(Arrays.equals(autumnIds,nativeIds(autumn,entries.size())),"Vanilla palette accepts the enlarged seasonal registry");
         handler.setPresentation(true,Season.WINTER,policy);
         Object winter=channel.readOutbound();int[] winterIds=ids(winter);
         for(int i=0;i<64;i++)check(winterIds[i]==original[i]+(original[i]==1?0:18),"Winter color/native snow routing preserves hot biomes "+i);
@@ -187,6 +187,19 @@ public final class NativeSnowPacketTests {
         for(int i=0;i<64;i++)check(summerIds[i]==original[i]+(original[i]==2?0:9),"Summer tint leaves cold biomes vanilla "+i);
         handler.setPresentation(false,null,policy);
         check(Arrays.equals(ids(channel.readOutbound()),original),"Disabling seasonal colors restores original IDs without loading terrain");
+        for(int step=0;step<=dev.trueseasons.visual.SeasonColorFrame.PALETTE_STEPS;step++){
+            var frame=new dev.trueseasons.visual.SeasonColorFrame(Season.SUMMER,Season.AUTUMN,step*32);
+            int bank=PaperBiomePackets.colorBank(frame,false);
+            Object staged=decodeBiome(((Optional<?>)call(entries.get(bank*3),"data")).orElseThrow());
+            check((int)staged.getClass().getMethod("getGrassColor",double.class,double.class).invoke(staged,0d,0d)==visuals.resolve(frame,"minecraft:forest").grassRgb(),"Native intermediate palette matches shared resolver at step "+step);
+            handler.setPresentation(false,Season.AUTUMN,policy,frame);
+            int[] stagedIds=ids(channel.readOutbound());
+            for(int i=0;i<64;i++)check(stagedIds[i]==original[i]+(original[i]==1||step==0&&original[i]==2?0:3*bank),"Intermediate mapping preserves source and target climate exclusions at step "+step);
+            handler.setPresentation(false,Season.AUTUMN,policy,frame);check(channel.readOutbound()==null,"Unchanged stage emits no extra biome update");
+            var coldFrame=new dev.trueseasons.visual.SeasonColorFrame(Season.AUTUMN,Season.WINTER,step*32);
+            Object cold=decodeBiome(((Optional<?>)call(entries.get(PaperBiomePackets.colorBank(coldFrame,true)*3),"data")).orElseThrow());
+            check((float)call(cold,"getBaseTemperature")==-1f,"Every winter stage retains native cold precipitation "+step);
+        }
         // Test global-palette width separately: enlarged registries can cross several bit boundaries.
         int[] many=new int[64];for(int i=0;i<64;i++)many[i]=i%12;
         packed=Unpooled.buffer();BiomeWireCodec.writeBiomes(packed,many,12,false,12);
@@ -195,6 +208,35 @@ public final class NativeSnowPacketTests {
         int[] decoded=nativePaletteIds(mapped,84);
         for(int i=0;i<64;i++)check(decoded[i]==many[i]+48,"Native decoder reads seasonal global palette cell "+i);
         channel.finishAndReleaseAll();
+    }
+    private static void registryCaching()throws Exception{
+        var config=new org.bukkit.configuration.file.YamlConfiguration();
+        for(Season season:Season.values())config.set("palettes.temperate."+season.key(),List.of("83B957","D98637"));
+        var resolver=new SeasonVisualResolver(config);Object source=biome(.7f,true),original=call(source,"copy");
+        var bridge=new PaperBiomePackets(Map.of("minecraft:forest",source));
+        Object packet=registry(List.of(entry("minecraft:forest",Optional.of(source))));
+        var first=bridge.registry(packet,resolver);
+        Object alias=((Optional<?>)call(((List<?>)call(first.packet(),"entries")).get(2),"data")).orElseThrow();
+        Object effects=alias.getClass().getMethod("getCompoundOrEmpty",String.class).invoke(alias,"effects");
+        effects.getClass().getMethod("putInt",String.class,int.class).invoke(effects,"grass_color",0);
+        var second=bridge.registry(registry(List.of(entry("minecraft:forest",Optional.empty()))),resolver);
+        List<?> entries=(List<?>)call(second.packet(),"entries");
+        check(((Optional<?>)call(entries.getFirst(),"data")).isEmpty(),"Cache retains each connection's original known-pack encoding");
+        Object cached=((Optional<?>)call(entries.get(2),"data")).orElseThrow();
+        check((int)decodeBiome(cached).getClass().getMethod("getGrassColor",double.class,double.class).invoke(decodeBiome(cached),0d,0d)==0x83B957,"Editing one outgoing alias never mutates the shared template");
+        check(source.equals(original),"Caching and independent client aliases leave authoritative NBT unchanged");
+        source.getClass().getMethod("putFloat",String.class,float.class).invoke(source,"temperature",.3f);
+        var changed=bridge.registry(packet,resolver);Object revised=((Optional<?>)call(((List<?>)call(changed.packet(),"entries")).get(2),"data")).orElseThrow();
+        check((float)call(decodeBiome(revised),"getBaseTemperature")==.3f,"Changed source biome NBT invalidates the shared template");
+        config.set("palettes.temperate.spring",List.of("123456","654321"));
+        var recolored=bridge.registry(packet,new SeasonVisualResolver(config));
+        Object updated=((Optional<?>)call(((List<?>)call(recolored.packet(),"entries")).get(2),"data")).orElseThrow();Object biome=decodeBiome(updated);
+        check((int)biome.getClass().getMethod("getGrassColor",double.class,double.class).invoke(biome,0d,0d)==0x123456,"Changed visual settings invalidate the shared template");
+        config.set("transition.opening-days",0);var immediate=new SeasonVisualResolver(config);
+        check(bridge.registry(packet,immediate).registrySize()==7,"Disabling gradual colors omits all unused intermediate aliases");
+        check(!immediate.equals(resolver),"Changing the available alias banks requires registry reconfiguration");
+        config.set("enabled",false);
+        check(bridge.registry(packet,new SeasonVisualResolver(config)).registrySize()==2,"Disabling seasonal colors retains only the original and cold climate banks");
     }
     private static Object entry(String id, Optional<?> data) throws Exception { return type("net.minecraft.core.RegistrySynchronization$PackedRegistryEntry").getConstructor(type("net.minecraft.resources.Identifier"), Optional.class).newInstance(identifier(id), data); }
     private static Object registry(List<?> entries) throws Exception {

@@ -8,15 +8,28 @@ import java.util.function.IntPredicate;
 import java.util.function.IntUnaryOperator;
 import dev.trueseasons.api.Season;
 import dev.trueseasons.visual.SeasonVisualResolver;
+import dev.trueseasons.visual.SeasonColorFrame;
 import org.bukkit.Bukkit;
 import io.papermc.paper.connection.PlayerCommonConnection;
 
 /** Isolated, fail-fast adapter for Mojang-mapped Paper 26.3. No server registry or chunk is mutated. */
 public final class PaperBiomePackets {
+    public static final int COLOR_BANKS=7+(SeasonColorFrame.PALETTE_STEPS-1)*5+1;
+    public static int colorBank(SeasonColorFrame frame,boolean snowy){
+        int step=frame.paletteStep();
+        if(step==SeasonColorFrame.PALETTE_STEPS)return snowy&&frame.to()==Season.WINTER?6:2+frame.to().ordinal();
+        if(step==0)return snowy&&frame.to()==Season.WINTER?COLOR_BANKS-1:2+frame.from().ordinal();
+        return 7+(step-1)*5+(snowy&&frame.to()==Season.WINTER?4:frame.to().ordinal());
+    }
     private final Class<?> registryPacket, packedEntry, compound, chunkPacket, chunkData, biomePacket, biomeData, forgetPacket;
     private final Constructor<?> registryConstructor, entryConstructor, chunkConstructor, chunkDataConstructor, biomeConstructor, biomeDataConstructor;
     private final Field sectionBuffer, heightmaps, blockEntities, extraPackets;
     private final Map<String, Object> authoritative;
+    private record SourceBiome(String key,Object tag){}
+    private record Alias(Object id,Object tag){}
+    private record RegistryTemplate(SeasonVisualResolver visuals,List<SourceBiome> source,List<Alias> aliases){}
+    // One bounded, shared immutable template. Original packet entries are never cached/replaced.
+    private RegistryTemplate template;
 
     public PaperBiomePackets() throws ReflectiveOperationException { this(null); }
     /** Dedicated packet tests supply authoritative encoded entries without starting a Minecraft server. */
@@ -44,12 +57,24 @@ public final class PaperBiomePackets {
     public RegistryResult registry(Object packet) throws ReflectiveOperationException {
         return registry(packet, null);
     }
-    public RegistryResult registry(Object packet, SeasonVisualResolver visuals) throws ReflectiveOperationException {
+    public synchronized RegistryResult registry(Object packet, SeasonVisualResolver visuals) throws ReflectiveOperationException {
         if (!registryPacket.isInstance(packet)) return null;
         Object key = call(packet, "registry");
         if (!call(key, "identifier").toString().equals("minecraft:worldgen/biome")) return null;
         List<?> entries = (List<?>) call(packet, "entries");
         List<Object> expanded = new ArrayList<>(entries);
+        List<SourceBiome> source=new ArrayList<>();
+        for(Object entry:entries){
+            String name=call(entry,"id").toString();Object tag=((Optional<?>)call(entry,"data")).orElse(null);
+            if(tag==null)tag=authoritative.get(name);
+            if(tag==null||!compound.isInstance(tag))throw new IllegalStateException("Cannot materialize biome "+name);
+            source.add(new SourceBiome(name,tag));
+        }
+        if(template!=null&&(template.visuals==visuals||template.visuals!=null&&visuals!=null&&template.visuals.registryFingerprint().equals(visuals.registryFingerprint()))&&template.source.equals(source)){
+            // Each connection gets independent NBT, including when other packet handlers edit it.
+            for(Alias alias:template.aliases)expanded.add(entryConstructor.newInstance(alias.id,Optional.of(call(alias.tag,"copy"))));
+            return new RegistryResult(registryConstructor.newInstance(key,List.copyOf(expanded)),entries.size(),source.stream().map(SourceBiome::key).toList(),expanded.size());
+        }
         Set<String> identifiers = new HashSet<>(); for (Object entry : entries) identifiers.add(call(entry, "id").toString());
         for (Object entry : entries) {
             Object id = call(entry, "id");
@@ -66,7 +91,7 @@ public final class PaperBiomePackets {
             Object alias = type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, aliasName);
             expanded.add(entryConstructor.newInstance(alias, Optional.of(cold)));
         }
-        if (visuals != null) {
+        if (visuals != null&&visuals.enabled()) {
             // All season banks are delivered once during configuration. Switching
             // seasons then changes only the client's already-loaded biome palettes.
             for (int bank = 0; bank < 5; bank++) for (Object entry : entries) {
@@ -94,9 +119,36 @@ public final class PaperBiomePackets {
                 Object alias = type("net.minecraft.resources.Identifier").getMethod("parse", String.class).invoke(null, aliasName);
                 expanded.add(entryConstructor.newInstance(alias, Optional.of(colored)));
             }
+            // Fixed intermediate banks are sent only during configuration, never on a clock tick.
+            if(visuals.gradualColors()){
+                for(int step=1;step<SeasonColorFrame.PALETTE_STEPS;step++)for(int bank=0;bank<5;bank++)
+                    for(Object entry:entries)addIntermediate(expanded,identifiers,entry,visuals,bank==4?Season.WINTER:Season.values()[bank],step,bank==4);
+                for(Object entry:entries)addIntermediate(expanded,identifiers,entry,visuals,Season.WINTER,0,true);
+            }
         }
         List<String> biomeKeys = new ArrayList<>(); for (Object entry : entries) biomeKeys.add(call(entry, "id").toString());
+        if(entries.size()<=256){
+            List<SourceBiome> originals=new ArrayList<>();
+            for(SourceBiome biome:source)originals.add(new SourceBiome(biome.key,call(biome.tag,"copy")));
+            List<Alias> aliases=new ArrayList<>();
+            for(Object alias:expanded.subList(entries.size(),expanded.size()))aliases.add(new Alias(call(alias,"id"),call(((Optional<?>)call(alias,"data")).orElseThrow(),"copy")));
+            template=new RegistryTemplate(visuals,List.copyOf(originals),List.copyOf(aliases));
+        }else template=null;
         return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size(), List.copyOf(biomeKeys), expanded.size());
+    }
+    private void addIntermediate(List<Object> expanded,Set<String> identifiers,Object entry,SeasonVisualResolver visuals,Season season,int step,boolean cold)throws ReflectiveOperationException{
+        String biome=call(entry,"id").toString(),name="trueseasons:"+(cold?"snow_stage_":"color_stage_")+season.key()+"_"+step+"/"+biome.replace(':','/');
+        if(identifiers.contains(name))throw new IllegalStateException("Reserved client biome alias already exists: "+name);
+        Object tag=((Optional<?>)call(entry,"data")).orElse(null);if(tag==null)tag=authoritative.get(biome);
+        if(tag==null||!compound.isInstance(tag))throw new IllegalStateException("Cannot materialize biome "+biome);
+        Object colored=call(tag,"copy"),effects=call(compound.getMethod("getCompoundOrEmpty",String.class).invoke(colored,"effects"),"copy");
+        var profile=visuals.resolve(new SeasonColorFrame(visuals.previous(season),season,step*SeasonColorFrame.COMPLETE/SeasonColorFrame.PALETTE_STEPS),biome);
+        for(String field:List.of("grass_color","foliage_color","dry_foliage_color"))compound.getMethod("putInt",String.class,int.class).invoke(effects,field,field.equals("grass_color")?profile.grassRgb():profile.foliageRgb());
+        compound.getMethod("putString",String.class,String.class).invoke(effects,"grass_color_modifier","none");
+        compound.getMethod("put",String.class,type("net.minecraft.nbt.Tag")).invoke(colored,"effects",effects);
+        if(cold){compound.getMethod("putFloat",String.class,float.class).invoke(colored,"temperature",-1f);compound.getMethod("putBoolean",String.class,boolean.class).invoke(colored,"has_precipitation",true);compound.getMethod("putString",String.class,String.class).invoke(colored,"temperature_modifier","none");}
+        Object alias=type("net.minecraft.resources.Identifier").getMethod("parse",String.class).invoke(null,name);
+        expanded.add(entryConstructor.newInstance(alias,Optional.of(colored)));
     }
 
     public boolean isChunk(Object packet) { return chunkPacket.isInstance(packet); }

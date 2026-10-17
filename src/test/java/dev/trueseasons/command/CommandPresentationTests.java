@@ -139,6 +139,15 @@ public final class CommandPresentationTests {
         Path confirmationDirectory=Files.createTempDirectory(Path.of("").toAbsolutePath(),"trueseasons-command-state-");
         try {
             set(state,"file",confirmationDirectory.resolve("jobs.yml"));
+            // A manual target keeps this command-only fixture independent of the wall clock and Bukkit worlds.
+            set(settings,"enabled",false);state.override=Season.WINTER;
+            set(plugin,"version","manual-WINTER-r0-snow4");
+            set(plugin,"engineVersion","manual-WINTER-r0-snow4");
+            set(plugin,"clock",java.time.Clock.systemUTC());
+            set(settings,"calendar",new dev.trueseasons.calendar.SeasonCalendar(java.time.ZoneOffset.UTC,Map.of(Season.SPRING,List.of(3,4,5),Season.SUMMER,List.of(6,7,8),Season.AUTUMN,List.of(9,10,11),Season.WINTER,List.of(12,1,2))));
+            var palettes=new org.bukkit.configuration.file.YamlConfiguration();
+            for(Season season:Season.values())palettes.set("palettes.temperate."+season.key(),List.of("83B957","D98637"));
+            set(plugin,"visuals",new dev.trueseasons.visual.SeasonVisualResolver(palettes));
             for(String action : List.of("pause","resume")) {
                 messages.clear(); command.onCommand(sender,null,"trueseasons",new String[]{"migration",action});
                 String feedback=action.equals("pause")?"paused":"resumed";
@@ -151,6 +160,11 @@ public final class CommandPresentationTests {
                         "Pause and resume feedback corresponds to the persisted migration state");
                 check(state.pauseReason.equals(state.paused?"Paused manually.":""),"Manual pause and resume update the reason with the saved intent");
             }
+            plugin.pauseTransitions(true);set(plugin,"engineVersion","previous-target");set(engine,"jobs",Map.of());
+            plugin.pauseTransitions(false);
+            Field engineVersion=TrueSeasonsPlugin.class.getDeclaredField("engineVersion");engineVersion.setAccessible(true);
+            check(engineVersion.get(plugin).equals(plugin.version())&&!state.paused&&state.winterColumns==128,"Resume recovers a target change interrupted before its jobs restarted, preserving saved coverage");
+            set(engine,"jobs",Map.of(id,job));
             state.paused=true;state.pauseReason="Automatic pause during BlueMap update: disk full";state.save();
             check(new StateStore(confirmationDirectory).pauseReason.equals(state.pauseReason),"Automatic pause reasons survive restart");
             messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration"});

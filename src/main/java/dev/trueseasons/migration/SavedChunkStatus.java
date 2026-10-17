@@ -14,30 +14,43 @@ final class SavedChunkStatus {
         Path region=directory.resolve("r."+Math.floorDiv(pos.x(),32)+"."+Math.floorDiv(pos.z(),32)+".mca");
         try(RandomAccessFile file=new RandomAccessFile(region.toFile(),"r")) {
             long slot=(Math.floorMod(pos.x(),32)+Math.floorMod(pos.z(),32)*32)*4L;
-            file.seek(slot); int location=file.readInt(), offset=location>>>8, sectors=location&255;
-            if(offset<2||sectors==0) throw new IOException("Chunk disappeared during index scan");
-            file.seek(offset*4096L); int size=file.readInt(), format=file.readUnsignedByte();
-            byte[] bytes;
-            if((format&128)!=0) {
-                Path external=directory.resolve("c."+pos.x()+"."+pos.z()+".mcc");
-                if(Files.size(external)>LIMIT) throw new IOException("External chunk exceeds status read limit");
-                bytes=Files.readAllBytes(external);
-            } else {
-                if(size<1||size>LIMIT||size>sectors*4096-4) throw new IOException("Invalid chunk length");
-                bytes=new byte[size-1]; file.readFully(bytes);
-            }
-            Parsed parsed=new Parsed();
-            try(InputStream stream=decode(new ByteArrayInputStream(bytes),format&127);
-                DataInputStream input=new DataInputStream(new Bounded(stream))) {
-                if(input.readUnsignedByte()!=10) throw new IOException("Chunk NBT root is not a compound");
-                input.readUTF(); compound(input,"",0,parsed);
-            }
-            file.seek(slot); if(file.readInt()!=location) throw new IOException("Chunk moved during status read");
-            if(parsed.status==null) throw new IOException("Missing chunk generation Status");
-            return new SavedChunkState(parsed.status.equals("full")||parsed.status.equals("minecraft:full"),
-                parsed.version,parsed.pendingVersion,parsed.pending,parsed.columns,parsed.seasonMetadata,parsed.mapMarker,parsed.mapRevision);
+            byte[] scratch=new byte[5];file.seek(slot);file.readFully(scratch,0,4);
+            return read(file,directory,pos,integer(scratch),scratch);
         }
     }
+    /** One read-only region handle and scratch buffer can serve every occupied slot. */
+    static SavedChunkState read(RandomAccessFile file,Path directory,ChunkPos pos,int location,byte[] scratch)throws IOException{
+        int offset=location>>>8,sectors=location&255;
+        if(offset<2||sectors==0)throw new IOException("Chunk disappeared during index scan");
+        file.seek(offset*4096L);file.readFully(scratch,0,5);
+        int size=integer(scratch),format=scratch[4]&255;
+        if(size<1)throw new IOException("Invalid chunk length");
+        byte[] bytes;
+        if((format&128)!=0){
+            Path external=directory.resolve("c."+pos.x()+"."+pos.z()+".mcc");
+            if(Files.size(external)>LIMIT)throw new IOException("External chunk exceeds status read limit");
+            try(InputStream input=Files.newInputStream(external)){
+                bytes=input.readNBytes(LIMIT+1);
+                if(bytes.length>LIMIT)throw new IOException("External chunk exceeds status read limit");
+            }
+        }else{
+            if(size>LIMIT||size>sectors*4096-4)throw new IOException("Invalid chunk length");
+            bytes=new byte[size-1];file.readFully(bytes);
+        }
+        Parsed parsed=new Parsed();
+        try(InputStream stream=decode(new ByteArrayInputStream(bytes),format&127);
+            DataInputStream input=new DataInputStream(new BufferedInputStream(new Bounded(stream),256))){
+            if(input.readUnsignedByte()!=10)throw new IOException("Chunk NBT root is not a compound");
+            input.readUTF();compound(input,"",0,parsed);
+        }
+        long slot=(Math.floorMod(pos.x(),32)+Math.floorMod(pos.z(),32)*32)*4L;
+        file.seek(slot);file.readFully(scratch,0,4);
+        if(integer(scratch)!=location)throw new IOException("Chunk moved during status read");
+        if(parsed.status==null)throw new IOException("Missing chunk generation Status");
+        return new SavedChunkState(parsed.status.equals("full")||parsed.status.equals("minecraft:full"),
+            parsed.version,parsed.pendingVersion,parsed.pending,parsed.columns,parsed.seasonMetadata,parsed.mapMarker,parsed.mapRevision);
+    }
+    private static int integer(byte[] bytes){return (bytes[0]&255)<<24|(bytes[1]&255)<<16|(bytes[2]&255)<<8|bytes[3]&255;}
     private static InputStream decode(InputStream input,int format) throws IOException {
         return switch(format) {
             case 1 -> new GZIPInputStream(input);

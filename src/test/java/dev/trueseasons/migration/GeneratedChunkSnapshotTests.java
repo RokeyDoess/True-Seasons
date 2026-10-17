@@ -130,6 +130,65 @@ public final class GeneratedChunkSnapshotTests {
         check(Arrays.equals(before,Files.readAllBytes(region)), "Saved checkpoint hydration checks never edit world data");
         check(index.scanSnapshot(directory).states().equals(states), "Saved metadata checkpoints are stable across repeated reads");
     }
+    private static void sharedRegion(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("shared-region"));
+        Path region=directory.resolve("r.-1.-1.mca"),external=directory.resolve("c.-28.-32.mcc");
+        try(RandomAccessFile file=new RandomAccessFile(region.toFile(),"rw")){
+            file.setLength(10L*4096);
+            chunk(file,0,2,status("minecraft:full",false),2);
+            chunk(file,1,3,new byte[]{10,0},2);
+            chunk(file,2,4,status("full",true),1);
+            chunk(file,3,5,status("minecraft:full",false),3);
+            for(int slot=4;slot<=5;slot++){
+                file.seek(slot*4L);file.writeInt(((slot+2)<<8)|1);
+                file.seek((slot+2L)*4096);file.writeInt(1);file.writeByte(128|2);
+            }
+            Files.write(external,payload(status("minecraft:full",false),2));
+            chunk(file,6,8,status("minecraft:full",false),99);
+            chunk(file,7,9,status("minecraft:full",false),2);
+        }
+        byte[] before=Files.readAllBytes(region),externalBefore=Files.readAllBytes(external);
+        var index=new GeneratedChunkIndex();var result=index.scanSnapshot(directory);
+        check(result.generated().equals(List.of(new ChunkPos(-32,-32),new ChunkPos(-30,-32),new ChunkPos(-29,-32),
+            new ChunkPos(-28,-32),new ChunkPos(-25,-32))),"Shared region reader handles zlib, gzip, raw, external and final readable chunks");
+        check(result.unreadable().keySet().equals(Set.of(new ChunkPos(-31,-32),new ChunkPos(-27,-32),new ChunkPos(-26,-32))),
+            "Malformed NBT, missing external payload and unknown compression defer only their own chunks");
+        check(Arrays.equals(before,Files.readAllBytes(region))&&Arrays.equals(externalBefore,Files.readAllBytes(external)),
+            "Shared reader changes neither regions nor external chunk payloads");
+        Thread.currentThread().interrupt();
+        try{index.scanSnapshot(directory);throw new AssertionError("Cancelled scan continued");}
+        catch(IOException expected){check(expected.getMessage().contains("cancelled"),"Cancellation stops a scan without publishing partial completion");}
+        finally{Thread.interrupted();}
+        // A captured location must not become an accepted checkpoint after relocation.
+        try(RandomAccessFile writer=new RandomAccessFile(region.toFile(),"rw")){
+            writer.seek(0);writer.writeInt((5<<8)|1);
+        }
+        try(RandomAccessFile reader=new RandomAccessFile(region.toFile(),"r")){
+            try{SavedChunkStatus.read(reader,directory,new ChunkPos(-32,-32),(2<<8)|1,new byte[5]);
+                throw new AssertionError("Moved chunk accepted");}
+            catch(IOException expected){check(expected.getMessage().contains("moved"),"Region handle reuse still rejects a chunk whose saved location changed");}
+        }
+        try(RandomAccessFile writer=new RandomAccessFile(region.toFile(),"rw")){
+            writer.seek(0);writer.writeInt((2<<8)|1);
+        }
+        check(index.scanSnapshot(directory).generated().equals(result.generated()),"Closed failed reads leave subsequent region scans usable");
+        Path tooLarge=directory.resolve("c.-27.-32.mcc");
+        try(RandomAccessFile file=new RandomAccessFile(tooLarge.toFile(),"rw")){file.setLength(16L*1024*1024+1);}
+        var oversized=index.scanSnapshot(directory);
+        check(oversized.unreadable().get(new ChunkPos(-27,-32)).contains("exceeds"),"Oversized external payload is bounded and cannot hide behind a full checkpoint");
+    }
+    private static void decompressionLimit(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("decompression-limit"));
+        byte[] oversized=payload(status("minecraft:full",false,new Tag(7,"trueseasons:snow_v1",new byte[16*1024*1024-1])),2);
+        int sectors=(oversized.length+5+4095)/4096;
+        try(RandomAccessFile file=new RandomAccessFile(directory.resolve("r.0.0.mca").toFile(),"rw")){
+            file.setLength((2L+sectors)*4096);file.writeInt((2<<8)|sectors);
+            file.seek(2L*4096);file.writeInt(oversized.length+1);file.writeByte(2);file.write(oversized);
+        }
+        var result=new GeneratedChunkIndex().scanSnapshot(directory);
+        check(result.generated().isEmpty()&&result.unreadable().get(new ChunkPos(0,0)).contains("exceeds"),
+            "Buffered parsing still enforces the total decompressed limit after a valid FULL tag");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("trueseasons-status-regression-");
         try {
@@ -166,6 +225,8 @@ public final class GeneratedChunkSnapshotTests {
             check(empty.generated().isEmpty() && empty.unfinished().isEmpty() && empty.unreadable().isEmpty(), "Missing region directories remain empty without being created");
             check(!Files.exists(directory.resolve("missing")), "Snapshot indexing never creates a world directory");
             checkpoints(directory);
+            sharedRegion(directory);
+            decompressionLimit(directory);
         } finally {
             try (var paths = Files.walk(directory)) {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);

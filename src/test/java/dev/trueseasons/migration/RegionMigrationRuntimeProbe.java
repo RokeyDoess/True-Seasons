@@ -13,6 +13,7 @@ import org.bukkit.event.*;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.inventory.*;
 import org.bukkit.plugin.java.JavaPlugin;
+import com.destroystokyo.paper.event.server.ServerTickEndEvent;
 
 /** Two normal starts, real region sequencing, winter plant persistence and final BlueMap receipts. */
 public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Listener {
@@ -23,6 +24,11 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
     private int checks, ticks;
     private long began, winterRenders;
     private final Set<String> visited = new HashSet<>();
+    private final Set<Object> seenTickets=Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Map<String,Set<String>> requestedRegions=new HashMap<>();
+    private Field flightsField;
+    private Object mapIntegration;
+    private long springRenders;
     private Path phaseFile = Path.of("region-probe-phase.txt");
     private YamlConfiguration data;
     @Override public void onEnable() {
@@ -30,6 +36,9 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
             if (!Files.exists(Path.of("region-verification-clone.txt"))) throw new IllegalStateException("Disposable region verification clone required");
             seasons = (TrueSeasonsPlugin) Objects.requireNonNull(Bukkit.getPluginManager().getPlugin("TrueSeasons"));
             world = Bukkit.getWorlds().stream().filter(seasons::eligible).findFirst().orElseThrow();
+            Field adapter=seasons.integrations().getClass().getDeclaredField("blueMap");adapter.setAccessible(true);
+            mapIntegration=Objects.requireNonNull(adapter.get(seasons.integrations()));
+            flightsField=mapIntegration.getClass().getDeclaredField("flights");flightsField.setAccessible(true);
             data = YamlConfiguration.loadConfiguration(Path.of("region-probe-data.yml").toFile());
             phase = Files.exists(phaseFile) ? Files.readString(phaseFile).strip() : "startup";
             if (phase.equals("startup") && !seasons.state().cleanup && seasons.currentSeason()!=Season.SPRING)
@@ -49,6 +58,24 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
     }
     private void check(boolean value, String label) { checks++; if (!value) throw new AssertionError(label); getLogger().info("PASS: " + label); }
     private String region(ChunkPos pos) { return Math.floorDiv(pos.x(),32)+","+Math.floorDiv(pos.z(),32); }
+    @EventHandler public void renderRequests(ServerTickEndEvent event){
+        if(!(phase.equals("winter")||phase.equals("spring")||phase.equals("cleanup")))return;
+        try{
+            // Accepted flights remain in the main-thread map until the next tick,
+            // even when an empty-region render finishes immediately on a worker.
+            for(var row:((Map<?,?>)flightsField.get(mapIntegration)).entrySet()){
+                Object flight=row.getValue();Method ticket=flight.getClass().getDeclaredMethod("ticket");ticket.setAccessible(true);
+                if(!seenTickets.add(ticket.invoke(flight)))continue;
+                Method regions=flight.getClass().getDeclaredMethod("regions");regions.setAccessible(true);
+                Set<String> requests=requestedRegions.computeIfAbsent(phase,ignored->new HashSet<>());
+                for(Object value:(List<?>)regions.invoke(flight)){
+                    String key=row.getKey()+"/"+value;
+                    if(!requests.add(key))failure="Duplicate accepted map-region render in "+phase+": "+key;
+                }
+            }
+        }catch(Exception error){fail(error);}
+    }
+    private int requests(String target){return requestedRegions.getOrDefault(target,Set.of()).size();}
     @EventHandler public void migrated(SeasonChunkUpdatedEvent event) {
         if (!event.getChunk().getWorld().equals(world) || !(phase.equals("winter") || phase.equals("starting-winter") || phase.equals("spring"))) return;
         String current = region(new ChunkPos(event.getChunk().getX(),event.getChunk().getZ()));
@@ -71,11 +98,14 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
         if (ticks % 15 == 0) Bukkit.dispatchCommand(Bukkit.getConsoleSender(),"ts status");
         if (phase.equals("startup")) {
             if (!seasons.engine().allFinished() || seasons.state().cleanup || seasons.integrations().pending()!=0) return;
+            // Saved-world indexing can finish before BlueMap's asynchronous resource load.
+            if(!seasons.integrations().status().startsWith("connected"))return;
             check(seasons.integrations().status().startsWith("connected"), "Real BlueMap connected");
             Set<ChunkPos> headers = new HashSet<>(new GeneratedChunkIndex().scan(world.getWorldPath().resolve("region")));
             data.set("headers",headers.stream().map(p -> p.x()+","+p.z()).sorted().toList());
             ChunkPos position = job().known.stream().filter(p -> !job().unfinishedTerrain().contains(p)).min(
-                java.util.Comparator.<ChunkPos>comparingInt(p -> Math.floorDiv(p.z(),32)).thenComparingInt(p -> Math.floorDiv(p.x(),32)).thenComparingInt(ChunkPos::z).thenComparingInt(ChunkPos::x)).orElseThrow();
+                java.util.Comparator.comparingLong(RegionMigrationRuntimeProbe::fixtureRegionOrder)
+                    .thenComparingInt(p -> Math.floorMod(p.z(),32)*32+Math.floorMod(p.x(),32))).orElseThrow();
             data.set("x",position.x()); data.set("z",position.z()); data.set("y",world.getMaxHeight()-25); saveData();
             phase = "loading";
             world.getChunkAtAsync(position.x(),position.z(),false,false).thenAccept(chunk -> {
@@ -113,7 +143,8 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
             if (!seasons.engine().allFinished() || seasons.integrations().pending()!=0) return;
             check(visited.size()>=2 && failure==null, "Every observed region finished before the next started, including restart");
             check(seasons.weather().activeStorms()==0, "Introductory storm ends when world migration finishes");
-            winterRenders = renders(); check(winterRenders>0 && winterRenders<=visited.size()*mapCount(), "BlueMap accepts at most one winter request per changed region per map");
+            winterRenders = renders(); check(winterRenders>0 && winterRenders==requests("winter") && failure==null,
+                "Every accepted winter map-region request was observed exactly once, including palette-only regions");
             loadFixture(() -> {
                 check(fixture.getPersistentDataContainer().has(new NamespacedKey(seasons,"ground_cover_v1")), "Plant backups survive normal restart and final winter completion");
                 Block replacement = block(2,10); var old = replacement.getState(); replacement.setType(Material.DIAMOND_BLOCK,false);
@@ -130,7 +161,8 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
                 check(block(2,10).getType()==Material.DIAMOND_BLOCK, "Player replacement prevents plant resurrection");
                 check(!fixture.getPersistentDataContainer().has(new NamespacedKey(seasons,"ground_cover_v1")), "Resolved plant backups retire after restoration");
                 check(block(14,2).getType()==Material.POPPY && block(14,6).getType()==Material.POPPY, "Hot-biome plants were never claimed or removed");
-                check(renders()-winterRenders<=visited.size()*mapCount(), "Spring map requests stay bounded by changed regions and maps");
+                springRenders=renders()-winterRenders;
+                check(springRenders==requests("spring")&&failure==null,"Spring also renders each requested map region once");
                 phase="cleanup"; seasons.startCleanup();
             }); return;
         }
@@ -138,15 +170,21 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
             Set<String> after = new HashSet<>(); for (var p : new GeneratedChunkIndex().scan(world.getWorldPath().resolve("region"))) after.add(p.x()+","+p.z());
             check(after.equals(new HashSet<>(data.getStringList("headers"))), "Migration, restart and cleanup generate zero terrain");
             check(seasons.integrations().cleanupPending()==0, "Cleanup verifies map metadata removal");
+            check(renders()-winterRenders-springRenders==requests("cleanup")&&failure==null,"Cleanup map requests also contain no duplicate regions");
             Files.writeString(phaseFile,"complete"); Files.writeString(Path.of("region-verification-result.txt"),"PASS: region order, restart, climate, exact plant restoration and final map receipts; "+checks+" checks this start.\n");
             stop("PROBE_REGION_ALL_PASSED");
         }
+    }
+    private static long fixtureRegionOrder(ChunkPos position){
+        long x=Math.floorDiv(position.x(),32),z=Math.floorDiv(position.z(),32),ring=Math.max(Math.abs(x),Math.abs(z));
+        if(ring==0)return 0;
+        long offset=x==ring&&z>-ring?z+ring-1:z==ring?3*ring-1-x:x==-ring?5*ring-1-z:7*ring+x-1;
+        return (2*ring-1)*(2*ring-1)+offset;
     }
     private long renders() throws Exception {
         var manager = seasons.integrations(); Field adapter=manager.getClass().getDeclaredField("blueMap"); adapter.setAccessible(true);
         Object integration=adapter.get(manager); Field meter=integration.getClass().getDeclaredField("regionRendersScheduled"); meter.setAccessible(true); return meter.getLong(integration);
     }
-    private int mapCount() { return de.bluecolored.bluemap.api.BlueMapAPI.getInstance().orElseThrow().getWorld(world).orElseThrow().getMaps().size(); }
     private Block block(int x,int z) { return fixture.getBlock(x,data.getInt("y"),z); }
     private void makeFixtures() throws Exception {
         for (int[] p : new int[][]{{2,2},{6,2},{10,2},{10,6},{14,2},{14,6},{2,10}}) {

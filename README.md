@@ -1,6 +1,6 @@
 # True Seasons
 
-[![Latest prerelease: v0.2.1](https://img.shields.io/badge/prerelease-v0.2.1-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.1)
+[![Latest prerelease: v0.2.2](https://img.shields.io/badge/prerelease-v0.2.2-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.2)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -11,7 +11,7 @@ True Seasons brings seasons to the world you've already built, using Minecraft's
 
 **No resource pack. No client mod.** Players join with ordinary Minecraft.
 
-**Latest prerelease: [0.2.1](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.1).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
+**Latest prerelease: [0.2.2](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.2.2).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 
 ## Seasons that feel like Minecraft
 
@@ -36,6 +36,8 @@ Broken snow gets a refill delay, giving players time to dig. Terrain updates res
 True Seasons is a heavier plugin by nature. Changing real terrain across a large world takes work, and BlueMap rendering adds to that cost. Keeping that work efficient is a core part of the plugin's design.
 
 Terrain updates run in small, configurable batches and pause below **18.5 TPS** by default. Snow previews share a server-wide update budget, keeping the extra work bounded as more players connect. Map changes are combined, and completed regions are saved before their render is requested. Gradual snow previews add no extra BlueMap renders.
+
+World discovery runs in the background and avoids repeated file opens for individual chunks. Chunk tracking also handles dense generated areas efficiently, reducing the work needed to find and resume saved progress.
 
 Large worlds can take time to finish a transition. You can favor a lighter server workload or faster updates through the settings; hardware, player activity and your other plugins affect the result. See the [server guide](docs/SERVER_GUIDE.md#performance-and-settings) for the controls.
 

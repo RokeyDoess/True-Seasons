@@ -68,6 +68,8 @@ Use `/ts migration notify` for a single progress line every five seconds, sent o
 
 ## Performance and settings
 
+Saved-world discovery runs in the background and reuses each region file while checking its chunks. Chunk tracking also spreads nearby coordinates efficiently across its lookup tables. These improvements reduce indexing work; they do not eliminate the cost of changing terrain or rendering BlueMap.
+
 Each generated file explains its options.
 
 Terrain migration controls are in `config.yml`: `migration.max-chunks-per-tick`, `migration.max-millis-per-tick` and `migration.max-concurrent-chunks` limit application work and outstanding loads. `migration.pause-below-tps` defaults to 18.5. Snow preview limits are separate in `snow.yml`, and BlueMap's render limits are in `integrations.yml`. Lower limits reduce the work admitted at once but extend the transition. Time budgets are scheduling targets; an individual operation can take longer.

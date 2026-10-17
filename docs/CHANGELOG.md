@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Reduce background work when discovering saved chunks and checking migration progress on disk.
+- Improve chunk tracking performance in densely generated worlds.
+- Keep damaged, oversized or moving chunk data pending for safe revalidation.
+
 ## 0.2.1
 
 - Keep autumn leaf colors consistent as chunks load, reload and receive block updates.

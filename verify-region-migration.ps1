@@ -1,26 +1,39 @@
-param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1', [switch]$SkipBuild, [switch]$Resume)
+param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1', [switch]$SkipBuild, [switch]$Resume, [switch]$Reuse,
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')][string]$RunName='region-verification-0.2.2')
 $ErrorActionPreference = 'Stop'
 $taskSourceCandidate = Join-Path $PSScriptRoot 'run/verification'
 if (-not (Test-Path -LiteralPath $taskSourceCandidate)) { $taskSourceCandidate = Join-Path $PSScriptRoot '../test server' }
 $taskSource = (Resolve-Path -LiteralPath $taskSourceCandidate).Path
-$taskRun = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run/region-verification-0.1.10'))
+$taskRuntime = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../test server')).Path
+$taskRun = [System.IO.Path]::GetFullPath((Join-Path (Join-Path $PSScriptRoot 'run') $RunName))
 $taskRunRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run')) + [System.IO.Path]::DirectorySeparatorChar
 if (-not $taskRun.StartsWith($taskRunRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid verification path' }
-if ((Test-Path -LiteralPath $taskRun) -and -not $Resume) { throw 'Preserve previous region verification before running again' }
+if ((Test-Path -LiteralPath $taskRun) -and -not ($Resume -or $Reuse)) { throw 'Preserve previous region verification before running again' }
+if ($Reuse -and ($Resume -or -not (Test-Path -LiteralPath (Join-Path $taskRun 'region-verification-clone.txt')) -or (Test-Path -LiteralPath (Join-Path $taskRun 'region-probe-phase.txt')))) { throw 'Reuse requires a stopped startup-only clone with no partial verification checkpoint' }
 if ($Resume -and -not (Test-Path -LiteralPath (Join-Path $taskRun 'region-verification-clone.txt'))) { throw 'Existing controlled clone required for resume' }
 if (Get-NetTCPConnection -LocalPort 25585 -State Listen -ErrorAction SilentlyContinue) { throw 'Verification port is in use' }
+$taskPidFile=Join-Path $taskRun 'server.pid'
+if (Test-Path -LiteralPath $taskPidFile) {
+    $taskPidText=[IO.File]::ReadAllText($taskPidFile).Trim()
+    if ($taskPidText -match '^\d+$') {
+        $taskProcessCheck=Get-Process -Id ([int]$taskPidText) -ErrorAction SilentlyContinue
+        if ($taskProcessCheck -and $taskProcessCheck.ProcessName -eq 'java') { throw 'Verification server process is still running or saving' }
+    }
+}
 $taskSourceProperties = Join-Path $taskSource 'server.properties'
 if (-not $Resume -and (Test-Path -LiteralPath $taskSourceProperties)) {
     $taskPort = [regex]::Match([System.IO.File]::ReadAllText($taskSourceProperties),'(?m)^server-port=(\d+)')
     if ($taskPort.Success -and (Get-NetTCPConnection -LocalPort ([int]$taskPort.Groups[1].Value) -State Listen -ErrorAction SilentlyContinue)) { throw 'Stop the source server before copying its world' }
 }
 if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -JdkDirectory $JdkDirectory }
-if (-not $Resume) {
+if (-not ($Resume -or $Reuse)) {
 New-Item -ItemType Directory -Path $taskRun,(Join-Path $taskRun 'plugins') | Out-Null
-foreach ($taskName in @('libraries','cache','versions','world','config','bluemap','plugins')) {
+foreach ($taskName in @('world','config','bluemap','plugins')) {
     Copy-Item -LiteralPath (Join-Path $taskSource $taskName) -Destination $taskRun -Recurse -Force
 }
-foreach ($taskName in @('paper.jar','eula.txt','bukkit.yml','spigot.yml')) { Copy-Item -LiteralPath (Join-Path $taskSource $taskName) -Destination $taskRun }
+foreach ($taskName in @('libraries','cache','versions')) { Copy-Item -LiteralPath (Join-Path $taskRuntime $taskName) -Destination $taskRun -Recurse }
+Copy-Item -LiteralPath (Join-Path $taskRuntime 'paper.jar') -Destination $taskRun
+foreach ($taskName in @('eula.txt','bukkit.yml','spigot.yml')) { Copy-Item -LiteralPath (Join-Path $taskSource $taskName) -Destination $taskRun }
 }
 $taskPlugins = [System.IO.Path]::GetFullPath((Join-Path $taskRun 'plugins'))
 foreach ($taskJar in Get-ChildItem -LiteralPath $taskPlugins -Filter 'TrueSeasons*.jar') {
@@ -28,7 +41,7 @@ foreach ($taskJar in Get-ChildItem -LiteralPath $taskPlugins -Filter 'TrueSeason
     Rename-Item -LiteralPath $taskJar.FullName -NewName ($taskJar.Name + '.disabled.' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/plugins/bluemap-5.29-paper.jar') -Destination $taskPlugins -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.1.10.jar') -Destination $taskPlugins
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.2.2.jar') -Destination $taskPlugins
 $taskProbeBuild = Join-Path $PSScriptRoot 'build/region-probe'
 New-Item -ItemType Directory -Path $taskProbeBuild -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbeBuild 'plugin.yml'), @'

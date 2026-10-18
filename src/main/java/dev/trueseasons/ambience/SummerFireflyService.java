@@ -22,13 +22,23 @@ public final class SummerFireflyService {
         var settings=plugin.settings();var limits=settings.fireflies;
         nextRun=tick+limits.intervalTicks();lastAttempts=lastParticles=0;
         if(!limits.enabled()||!settings.enabled||plugin.currentSeason()!=Season.SUMMER||plugin.state().cleanup||plugin.state().clean||plugin.engine().currentTps()<settings.minTps)return;
-        List<? extends Player> players=new ArrayList<>(Bukkit.getOnlinePlayers());if(players.isEmpty())return;
+        List<? extends Player> players=eligibleViewers(Bukkit.getOnlinePlayers());if(players.isEmpty())return;
         var usage=FireflyBudget.visit(players,nextViewer,limits.attempts(),limits.particles(),player->emit(player,tick));
         nextViewer=usage.nextViewer();lastAttempts=usage.attempts();lastParticles=usage.particles();
     }
+    private List<? extends Player> eligibleViewers(Collection<? extends Player> online){
+        List<? extends Player> players=new ArrayList<>(online);
+        // Daytime, stormy and unsupported worlds must not consume another world's habitat budget.
+        players.removeIf(player->viewingWorld(player)==null);
+        return players;
+    }
+    private World viewingWorld(Player player){
+        World world=player.getWorld();
+        return plugin.eligible(world)&&FireflyHabitat.night(world.getTime())&&!world.hasStorm()?world:null;
+    }
     private boolean emit(Player player,long tick){
             var settings=plugin.settings();var limits=settings.fireflies;var random=ThreadLocalRandom.current();
-            World world=player.getWorld();if(!plugin.eligible(world)||!FireflyHabitat.night(world.getTime())||world.hasStorm())return false;
+            World world=viewingWorld(player);if(world==null)return false;
             var position=player.getLocation();
             // Favor visible nearby habitat, while still sampling the whole radius.
             int radius=random.nextInt(4)==0?limits.radius():Math.max(4,(limits.radius()+1)/2);

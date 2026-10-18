@@ -20,9 +20,11 @@ final class BlueMapVisualQueue implements AutoCloseable {
         ArrayDeque<Vector2i> rotation = new ArrayDeque<>();
         CompletableFuture<Discovered> discovery;
         Receipt receipt;
+        Rebinding rebinding;
     }
     private record Discovered(Set<Vector2i> regions, ArrayDeque<Vector2i> rotation) {}
     private record Receipt(String generation, List<Vector2i> regions, CompletableFuture<Void> durable) {}
+    private record Rebinding(String before,String after,String generation,CompletableFuture<Void> durable) {}
     private final Map<String, MapState> maps = new LinkedHashMap<>();
     private CompletableFuture<Boolean> compacting;
     private String failure;
@@ -39,8 +41,25 @@ final class BlueMapVisualQueue implements AutoCloseable {
     }
     /** The native world's listRegions only lists saved region coordinates; it never generates chunks. */
     void target(String map, String fingerprint, Callable<Collection<Vector2i>> existingRegions) {
+        target(map,fingerprint,null,existingRegions);
+    }
+    /** Equivalent old targets keep their region receipts and generation during the format upgrade. */
+    void target(String map,String fingerprint,String equivalent,Callable<Collection<Vector2i>> existingRegions){
         MapState state = maps.computeIfAbsent(map, ignored -> new MapState());
+        collectRebinding(state);
         if (state.target.equals(fingerprint) && (state.discovery == null || !state.discovery.isCompletedExceptionally())) return;
+        if(equivalent!=null&&state.target.equals(equivalent)&&!equivalent.equals(fingerprint)){
+            regions(map);
+            // Let an existing discovery or receipt finish without replacing its work.
+            if(state.discovery!=null||state.receipt!=null)return;
+            String before=state.target;state.target=fingerprint;
+            CompletableFuture<Void> durable=CompletableFuture.runAsync(()->{
+                try{journal.put(mapKey(map),fingerprint.getBytes(StandardCharsets.UTF_8),true);}
+                catch(IOException failure){throw new CompletionException(failure);}
+            },worker);
+            state.rebinding=new Rebinding(before,fingerprint,state.generation,durable);
+            return;
+        }
         state.target = fingerprint;
         state.generation = UUID.randomUUID().toString();
         state.discovery = CompletableFuture.supplyAsync(() -> {
@@ -62,6 +81,7 @@ final class BlueMapVisualQueue implements AutoCloseable {
     String receiptToken(String map) { MapState state = maps.get(map); return state == null ? "" : state.generation; }
     Collection<Vector2i> regions(String map) {
         MapState state = maps.get(map); if (state == null) return List.of();
+        collectRebinding(state);
         collectReceipt(state);
         if (state.discovery != null) {
             if (!state.discovery.isDone()) return List.of();
@@ -108,6 +128,16 @@ final class BlueMapVisualQueue implements AutoCloseable {
             // Intent remains pending and can safely render again after the failed receipt.
         }
     }
+    private void collectRebinding(MapState state){
+        Rebinding pending=state.rebinding;if(pending==null||!pending.durable.isDone())return;state.rebinding=null;
+        try{pending.durable.join();failure=null;}
+        catch(CompletionException failed){
+            if(state.generation.equals(pending.generation)&&state.target.equals(pending.after)){
+                state.target=pending.before;
+                failure="palette fingerprint persistence failed: "+failed.getCause();
+            }
+        }
+    }
     int pending() {
         return pending(maps.keySet());
     }
@@ -125,7 +155,7 @@ final class BlueMapVisualQueue implements AutoCloseable {
     int pending(Collection<String> relevantMaps) {
         int count = 0;
         for (String map : relevantMaps) {
-            MapState state = maps.get(map); if (state == null) continue; collectReceipt(state);
+            MapState state = maps.get(map); if (state == null) continue; collectRebinding(state);collectReceipt(state);
             count += state.discovery != null ? 1 : state.regions.size();
         }
         return count;
@@ -133,7 +163,7 @@ final class BlueMapVisualQueue implements AutoCloseable {
     int restorationPending(Collection<String> relevantMaps) {
         int count = 0;
         for (String map : relevantMaps) {
-            MapState state = maps.get(map); if (state == null) continue; collectReceipt(state);
+            MapState state = maps.get(map); if (state == null) continue; collectRebinding(state);collectReceipt(state);
             // An unavailable mapped colour hook may fail before it can establish a vanilla
             // target. Never claim that such a previously seasonal map is safely restored.
             count += !state.target.equals("vanilla") ? Math.max(1, state.regions.size()) : state.discovery != null ? 1 : state.regions.size();

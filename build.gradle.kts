@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.3.2"
+version = "0.3.3"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
@@ -38,6 +38,8 @@ listOf(
     "chunkCoordinateHashTest" to "dev.trueseasons.migration.ChunkCoordinateHashTests",
     "climateTest" to "dev.trueseasons.climate.SeasonClimateTests",
     "groundCoverTest" to "dev.trueseasons.snow.WinterGroundCoverTests",
+    "snowColumnsCodecTest" to "dev.trueseasons.snow.SnowColumnsCodecTests",
+    "groundCoverCodecTest" to "dev.trueseasons.snow.GroundCoverCodecTests",
     "snowOwnershipSnapshotsTest" to "dev.trueseasons.snow.SnowOwnershipSnapshotsTests",
     "snowPreviewPlanningTest" to "dev.trueseasons.snow.SnowPreviewPlanningTests",
     "snowmeltTest" to "dev.trueseasons.snow.SnowmeltTests",

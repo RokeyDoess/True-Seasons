@@ -38,7 +38,7 @@ Summer adds sparse native fireflies at dusk and night, near land beside water or
 
 Cherry groves and mangrove swamps take part in summer. The default cold-biome exclusion is `minecraft:grove`, which avoids matching those names too. Unchanged older defaults upgrade automatically; customized biome lists stay as written.
 
-Control fireflies in `ambience.yml`. Their sampling attempts and particles share a server-wide allowance across players, including failed habitat checks. The defaults allow 16 attempts and at most eight particles once per second, within 24 blocks of players. Work pauses below the configured TPS threshold and samples only loaded chunks. Fireflies have their own toggle and do not depend on seasonal weather being enabled.
+Control fireflies in `ambience.yml`. Their sampling attempts and particles share a server-wide allowance across eligible players, including failed habitat checks. Players in daytime, storms or other dimensions do not use those turns. The defaults allow 16 attempts and at most eight particles once per second, within 24 blocks of players. Work pauses below the configured TPS threshold and samples only loaded chunks. Fireflies have their own toggle and do not depend on seasonal weather being enabled.
 
 ## Install
 

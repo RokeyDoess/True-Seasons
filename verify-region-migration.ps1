@@ -1,5 +1,5 @@
 param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1', [switch]$SkipBuild, [switch]$Resume, [switch]$Reuse,
-    [ValidatePattern('^[a-zA-Z0-9._-]+$')][string]$RunName='region-verification-0.3.2')
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')][string]$RunName='region-verification-0.3.3')
 $ErrorActionPreference = 'Stop'
 $taskSourceCandidate = Join-Path $PSScriptRoot 'run/verification'
 if (-not (Test-Path -LiteralPath $taskSourceCandidate)) { $taskSourceCandidate = Join-Path $PSScriptRoot '../test server' }
@@ -41,7 +41,7 @@ foreach ($taskJar in Get-ChildItem -LiteralPath $taskPlugins -Filter 'TrueSeason
     Rename-Item -LiteralPath $taskJar.FullName -NewName ($taskJar.Name + '.disabled.' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/plugins/bluemap-5.29-paper.jar') -Destination $taskPlugins -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.2.jar') -Destination $taskPlugins
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.3.jar') -Destination $taskPlugins
 $taskProbeBuild = Join-Path $PSScriptRoot 'build/region-probe'
 New-Item -ItemType Directory -Path $taskProbeBuild -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbeBuild 'plugin.yml'), @'

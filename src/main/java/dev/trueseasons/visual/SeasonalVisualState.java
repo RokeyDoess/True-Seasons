@@ -20,8 +20,13 @@ public record SeasonalVisualState(SeasonVisualResolver resolver, Season season, 
     public SeasonalVisualState endpoint(){return colors.equals(SeasonColorFrame.settled(season))?this:new SeasonalVisualState(resolver,season,eligibleWorlds,worldSeeds);}
     public boolean active(UUID world) { return resolver.enabled() && eligibleWorlds.contains(world); }
     public String fingerprint(UUID world) {
+        return fingerprint(world,resolver.endpointFingerprint(season));
+    }
+    /** Exact previous-format target, used only when upgrading equivalent saved map work. */
+    public String legacyFingerprint(UUID world){return fingerprint(world,resolver.endpointFingerprint());}
+    private String fingerprint(UUID world,String endpoint){
         if(!active(world))return "vanilla";
-        return season.key()+"/"+resolver.endpointFingerprint()
+        return season.key()+"/"+endpoint
             +(season==Season.AUTUMN?"/trees="+resolver.autumnTrees()+(resolver.autumnTrees()?"/"+Long.toUnsignedString(seed(world)):""):"")
             +(season==Season.SPRING?"/blossoms="+resolver.springBlossoms()+(resolver.springBlossoms()?"/"+resolver.blossoms().signature()+"/"+Long.toUnsignedString(seed(world)):""):"");
     }

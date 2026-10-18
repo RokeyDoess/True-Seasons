@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+## 0.3.3
+
+- Lower the overhead of saving and restoring seasonal snow and plants.
+- Avoid extra BlueMap renders when a settings change leaves the current season's appearance unchanged.
+- Keep summer firefly search turns available to players in eligible worlds, instead of spending them in daytime, storms or other dimensions.
+
 ## 0.3.2
 
 - Let terrain migration back off after busy ticks and resume automatically once the server recovers. Migration status explains this brief wait.

@@ -69,7 +69,29 @@ public final class FireflyRuntimeProbe {
         AtomicInteger shown=new AtomicInteger();
         var budget=FireflyBudget.visit(java.util.Collections.nCopies(100,player),0,16,8,p->{shown.incrementAndGet();return true;});
         if(budget.particles()!=8||shown.get()!=8)throw new AssertionError("Particle cap must be shared across players");
-        return 7;
+        h.storm=false;
+        World excluded=proxy(World.class,(object,method,args)->switch(method.getName()){
+            case "getName" -> "firefly-excluded-test-world";
+            case "getEnvironment" -> World.Environment.NETHER;
+            default -> throw new AssertionError("Excluded viewers must require no terrain or time reads: "+method.getName());
+        });
+        Player excludedPlayer=proxy(Player.class,(object,method,args)->{
+            if(method.getName().equals("getWorld"))return excluded;
+            throw new AssertionError("Excluded viewer must not be sampled: "+method.getName());
+        });
+        var online=new java.util.ArrayList<Player>(java.util.Collections.nCopies(100,excludedPlayer));online.add(player);
+        var wasted=FireflyBudget.visit(online,0,16,8,p->{try{return (boolean)emit.invoke(service,p,140L);}catch(ReflectiveOperationException failure){throw new AssertionError(failure);}});
+        if(wasted.attempts()!=16||wasted.particles()!=0)throw new AssertionError("Mixed-world regression fixture must reproduce spent turns without habitat samples");
+        Method eligible=SummerFireflyService.class.getDeclaredMethod("eligibleViewers",java.util.Collection.class);eligible.setAccessible(true);
+        @SuppressWarnings("unchecked") var viewers=(java.util.List<Player>)eligible.invoke(service,online);
+        if(viewers.size()!=1||viewers.getFirst()!=player)throw new AssertionError("Unsupported worlds consumed eligible summer viewer turns");
+        var shared=FireflyBudget.visit(viewers,100,16,8,p->{try{return (boolean)emit.invoke(service,p,160L);}catch(ReflectiveOperationException failure){throw new AssertionError(failure);}});
+        if(shared.attempts()!=8||shared.particles()!=8)throw new AssertionError("Eligible player failed to use the unchanged shared allowance");
+        h.time=6000;
+        if(!((java.util.List<?>)eligible.invoke(service,java.util.List.of(player))).isEmpty())throw new AssertionError("Daytime viewer consumed habitat turns");
+        h.time=18000;h.storm=true;
+        if(!((java.util.List<?>)eligible.invoke(service,java.util.List.of(player))).isEmpty())throw new AssertionError("Stormy viewer consumed habitat turns");
+        return 12;
     }
     private static <T> T proxy(Class<T> type,InvocationHandler handler){
         return type.cast(Proxy.newProxyInstance(type.getClassLoader(),new Class<?>[]{type},handler));

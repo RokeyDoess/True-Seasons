@@ -602,7 +602,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                 String fingerprint = state == null ? "vanilla" : state.fingerprint(world.getKey());
                 Object nativeWorld = nativeMap.getClass().getMethod("getWorld").invoke(nativeMap);
                 var listRegions = nativeWorld.getClass().getMethod("listRegions");
-                visualQueue.target(map.getId(), fingerprint, () -> {
+                visualQueue.target(map.getId(), fingerprint, state==null?"vanilla":state.legacyFingerprint(world.getKey()), () -> {
                     @SuppressWarnings("unchecked") Collection<Vector2i> result = (Collection<Vector2i>) listRegions.invoke(nativeWorld); return result;
                 });
             } catch (ReflectiveOperationException | RuntimeException failure) { colorFailure = failure.getMessage(); unavailableColors.add(map.getId()); }

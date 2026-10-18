@@ -117,7 +117,104 @@ public final class BlueMapVisualQueueTests {
         }
         scopedCleanup(regions);
         distinctRegions(regions);
+        equivalentUpgrade(regions);
+        equivalentUpgradeFailure(regions);
         System.out.println("BlueMap visual queue tests passed");
+    }
+    private static Object state(BlueMapVisualQueue queue,String map)throws Exception{
+        Field maps=BlueMapVisualQueue.class.getDeclaredField("maps");maps.setAccessible(true);
+        return ((Map<?,?>)maps.get(queue)).get(map);
+    }
+    private static CompletableFuture<?> rebinding(BlueMapVisualQueue queue,String map)throws Exception{
+        Object state=state(queue,map);Field field=state.getClass().getDeclaredField("rebinding");field.setAccessible(true);
+        Object pending=field.get(state);if(pending==null)return CompletableFuture.completedFuture(null);
+        Field durable=pending.getClass().getDeclaredField("durable");durable.setAccessible(true);
+        return (CompletableFuture<?>)durable.get(pending);
+    }
+    private static void rebound(BlueMapVisualQueue queue,String map)throws Exception{
+        rebinding(queue,map).get(5,TimeUnit.SECONDS);queue.pending();
+    }
+    private static void equivalentUpgrade(List<Vector2i> regions)throws Exception{
+        Path directory=Files.createTempDirectory("trueseasons-palette-upgrade-");String map="surface";
+        Callable<Collection<Vector2i>> noDiscovery=()->{throw new AssertionError("Equivalent palette upgrade rediscovered finished terrain");};
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            queue.target(map,"legacy",()->regions);discovered(queue,map);
+            queue.acknowledge(map,queue.receiptToken(map),regions);acknowledged(queue,map);
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            String generation=queue.receiptToken(map);
+            queue.target(map,"scoped","legacy",noDiscovery);rebound(queue,map);
+            check(queue.target(map).equals("scoped")&&queue.pending()==0,"equivalent completed palette changes target without reopening regions");
+            check(queue.receiptToken(map).equals(generation),"equivalent upgrade keeps outstanding render generations valid");
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            check(queue.target(map).equals("scoped")&&queue.pending()==0,"equivalent fingerprint remains durable across restart");
+            queue.target(map,"scoped","legacy",noDiscovery);
+            queue.target(map,"legacy-partial",()->regions);discovered(queue,map);
+            queue.acknowledge(map,queue.receiptToken(map),List.of(regions.getFirst()));acknowledged(queue,map);
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            String generation=queue.receiptToken(map);
+            queue.target(map,"scoped-partial","legacy-partial",noDiscovery);
+            queue.acknowledge(map,generation,List.of(regions.get(1)));acknowledged(queue,map);rebound(queue,map);
+            check(queue.pending()==1&&queue.regions(map).contains(regions.get(2)),"upgrade keeps pending coordinates and accepts an existing in-flight receipt");
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            check(queue.target(map).equals("scoped-partial")&&queue.pending()==1,"partial upgraded receipt survives restart");
+            String generation=queue.receiptToken(map);
+            queue.target(map,"actually-changed","unrelated-legacy",()->regions);discovered(queue,map);
+            check(!queue.receiptToken(map).equals(generation)&&queue.pending()==3,"a changed palette still starts a fresh complete generation");
+            CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+            queue.target(map,"discovering-legacy",()->{entered.countDown();if(!release.await(5,TimeUnit.SECONDS))throw new AssertionError("discovery release timeout");return regions;});
+            check(entered.await(5,TimeUnit.SECONDS),"legacy discovery is in progress");
+            generation=queue.receiptToken(map);
+            try{
+                queue.target(map,"discovering-scoped","discovering-legacy",noDiscovery);
+                check(queue.target(map).equals("discovering-legacy"),"equivalent upgrade waits for pending discovery without replacing it");
+            }finally{release.countDown();}
+            discovered(queue,map);queue.target(map,"discovering-scoped","discovering-legacy",noDiscovery);rebound(queue,map);
+            check(queue.receiptToken(map).equals(generation)&&queue.pending()==3,"finished discovery upgrades without dropping its regions");
+            Field field=BlueMapVisualQueue.class.getDeclaredField("journal");field.setAccessible(true);Object journal=field.get(queue);
+            CountDownLatch locked=new CountDownLatch(1),unlock=new CountDownLatch(1);
+            CompletableFuture<Void> lock=CompletableFuture.runAsync(()->{synchronized(journal){locked.countDown();try{if(!unlock.await(5,TimeUnit.SECONDS))throw new AssertionError("receipt release timeout");}catch(InterruptedException failure){throw new CompletionException(failure);}}});
+            check(locked.await(5,TimeUnit.SECONDS),"receipt persistence can be delayed during upgrade");
+            try{
+                queue.acknowledge(map,generation,List.of(regions.getFirst()));
+                queue.target(map,"receipt-scoped","discovering-scoped",noDiscovery);
+                check(queue.target(map).equals("discovering-scoped"),"upgrade preserves an undurable receipt and retries later");
+            }finally{unlock.countDown();lock.get(5,TimeUnit.SECONDS);}
+            acknowledged(queue,map);queue.target(map,"receipt-scoped","discovering-scoped",noDiscovery);rebound(queue,map);
+            check(queue.pending()==2&&queue.receiptToken(map).equals(generation),"delayed receipt retires only its region across upgrade");
+            queue.target(map,"next-equivalent","receipt-scoped",noDiscovery);
+            queue.target(map,"new-content",()->List.of(new Vector2i(90,91)));discovered(queue,map);
+            check(queue.pending()==1&&queue.regions(map).contains(new Vector2i(90,91)),"a content change supersedes an in-flight equivalent upgrade in worker order");
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            check(queue.target(map).equals("new-content")&&queue.pending()==1,"superseding content target and coordinates persist together");
+        }
+    }
+    private static void equivalentUpgradeFailure(List<Vector2i> regions)throws Exception{
+        Path directory=Files.createTempDirectory("trueseasons-palette-upgrade-failure-");String map="surface";
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            queue.target(map,"legacy",()->regions);discovered(queue,map);String generation=queue.receiptToken(map);
+            Field field=BlueMapVisualQueue.class.getDeclaredField("journal");field.setAccessible(true);Object journal=field.get(queue);
+            Field channelField=DurableRenderJournal.class.getDeclaredField("channel");channelField.setAccessible(true);
+            var original=(java.nio.channels.FileChannel)channelField.get(journal);original.close();
+            try{
+                queue.target(map,"scoped","legacy",()->{throw new AssertionError("failed equivalent upgrade rediscovered regions");});
+                try{rebinding(queue,map).get(5,TimeUnit.SECONDS);throw new AssertionError("Closed journal accepted upgrade");}
+                catch(ExecutionException expected){queue.pending();}
+                check(queue.target(map).equals("legacy")&&queue.pending()==3&&queue.receiptToken(map).equals(generation),"failed fingerprint write restores retryable target without losing pending regions");
+                check(queue.failure()!=null,"failed equivalent upgrade exposes persistence error");
+            }finally{
+                var recovered=java.nio.channels.FileChannel.open(directory.resolve("bluemap.journal"),StandardOpenOption.WRITE);recovered.position(recovered.size());channelField.set(journal,recovered);
+            }
+            queue.target(map,"scoped","legacy",()->{throw new AssertionError("recovery rediscovered regions");});rebound(queue,map);
+            check(queue.target(map).equals("scoped")&&queue.pending()==3&&queue.failure()==null,"equivalent upgrade retries and clears its error after durability recovers");
+        }
+        try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
+            check(queue.target(map).equals("scoped")&&queue.pending()==3,"recovered upgrade remains durable without losing pending regions");
+        }
     }
     private static void distinctRegions(List<Vector2i> regions)throws Exception{
         Path directory=Files.createTempDirectory("trueseasons-distinct-regions-");UUID world=UUID.randomUUID(),other=UUID.randomUUID();

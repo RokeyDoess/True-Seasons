@@ -3,7 +3,7 @@ package dev.trueseasons.snow;
 import java.io.*;
 import java.util.*;
 
-/** Versioned sparse column bitmap + signed heights: <= 549 bytes per chunk. */
+/** Versioned sparse column bitmap + signed heights: <= 545 bytes per chunk. */
 public final class SnowColumns {
     private final Map<Integer, Integer> heights = new TreeMap<>();
     public void put(int column, int height) {
@@ -16,28 +16,35 @@ public final class SnowColumns {
     public boolean isEmpty() { return heights.isEmpty(); }
     public Map<Integer, Integer> entries() { return Collections.unmodifiableMap(heights); }
     public byte[] encode() {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(bytes);
-            out.writeByte(1);
-            BitSet bits = new BitSet(256);
-            heights.keySet().forEach(bits::set);
-            out.write(Arrays.copyOf(bits.toByteArray(), 32));
-            for (int height : heights.values()) out.writeShort(height);
-            return bytes.toByteArray();
-        } catch (IOException impossible) { throw new UncheckedIOException(impossible); }
+        byte[] bytes = new byte[33 + heights.size() * 2]; bytes[0] = 1; int offset = 33;
+        for (var entry : heights.entrySet()) {
+            int column = entry.getKey(), height = entry.getValue();
+            bytes[1 + (column >>> 3)] |= (byte) (1 << (column & 7));
+            bytes[offset++] = (byte) (height >>> 8); bytes[offset++] = (byte) height;
+        }
+        return bytes;
     }
     public static SnowColumns decode(byte[] bytes) throws IOException {
         SnowColumns result = new SnowColumns();
         if (bytes == null) return result;
-        DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes));
-        if (in.readUnsignedByte() != 1) throw new IOException("Unknown snow metadata schema");
-        byte[] bitmap = in.readNBytes(32);
-        if (bitmap.length != 32) throw new IOException("Truncated snow bitmap");
-        BitSet bits = BitSet.valueOf(bitmap);
-        for (int column = bits.nextSetBit(0); column >= 0; column = bits.nextSetBit(column + 1))
-            result.put(column, (int) in.readShort());
-        if (in.available() != 0) throw new IOException("Trailing snow metadata");
+        if (bytes.length == 0) throw new EOFException();
+        if ((bytes[0] & 255) != 1) throw new IOException("Unknown snow metadata schema");
+        if (bytes.length < 33) throw new IOException("Truncated snow bitmap");
+        int count = 0;
+        for (int at = 1; at <= 32; at++) count += Integer.bitCount(bytes[at] & 255);
+        // Validate the whole bounded record before building ownership entries.
+        int expected = 33 + count * 2;
+        if (bytes.length < expected) throw new EOFException();
+        if (bytes.length > expected) throw new IOException("Trailing snow metadata");
+        int offset = 33;
+        for (int at = 1; at <= 32; at++) {
+            int bits = bytes[at] & 255;
+            while (bits != 0) {
+                int column = (at - 1) * 8 + Integer.numberOfTrailingZeros(bits);
+                result.put(column, (short) ((bytes[offset] & 255) << 8 | (bytes[offset + 1] & 255)));
+                offset += 2; bits &= bits - 1;
+            }
+        }
         return result;
     }
 }

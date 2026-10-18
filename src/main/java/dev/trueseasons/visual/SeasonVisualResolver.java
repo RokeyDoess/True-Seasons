@@ -7,6 +7,8 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 /** Stateless shared palette source; it never writes chunk biome data. */
 public final class SeasonVisualResolver {
+    // Bump when rendered content changes, so neither fingerprint format can reuse older pixels.
+    private static final String CONTENT_VERSION="visual3";
     private final Map<String, List<String>> families = new LinkedHashMap<>();
     private final Map<String, Map<Season, SeasonVisualProfile>> palettes = new HashMap<>();
     private final SeasonClimatePolicy climate;
@@ -17,6 +19,7 @@ public final class SeasonVisualResolver {
     private final boolean gradualColors;
     private final String fingerprint;
     private final String endpointFingerprint;
+    private final Map<Season,String> seasonEndpoints;
     private final String registryFingerprint;
     private final Map<Season,Season> previous;
     public SeasonVisualResolver(YamlConfiguration config) {
@@ -48,6 +51,17 @@ public final class SeasonVisualResolver {
             palettes.put(name, seasons);
         }
         endpointFingerprint=computeEndpointFingerprint();
+        var endpoints=new EnumMap<Season,String>(Season.class);
+        for(Season season:Season.values()){
+            var profiles=new EnumMap<Season,Map<String,SeasonVisualProfile>>(Season.class);
+            for(Season rendered:climate.paletteSeasons(season)){
+                var familiesForSeason=new TreeMap<String,SeasonVisualProfile>();
+                palettes.forEach((family,values)->familiesForSeason.put(family,values.get(rendered)));
+                profiles.put(rendered,familiesForSeason);
+            }
+            endpoints.put(season,digest("season1/"+CONTENT_VERSION+"\n"+enabled+"\n"+families+"\n"+profiles+"\n"+climate.signature(season)));
+        }
+        seasonEndpoints=Map.copyOf(endpoints);
         registryFingerprint=digest(endpointFingerprint+"\n"+new TreeMap<>(previous)+"\n"+gradualColors);
         fingerprint=digest(registryFingerprint+"\n"+autumnTrees+"/"+springBlossoms+"/"+blossoms.signature());
     }
@@ -90,9 +104,10 @@ public final class SeasonVisualResolver {
         return fingerprint;
     }
     public String endpointFingerprint(){return endpointFingerprint;}
+    public String endpointFingerprint(Season season){return seasonEndpoints.get(Objects.requireNonNull(season));}
     public String registryFingerprint(){return registryFingerprint;}
     private String computeEndpointFingerprint() {
-        return digest("visual3\n" + enabled + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature());
+        return digest(CONTENT_VERSION+"\n" + enabled + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature());
     }
     private static String digest(String value){
         try {

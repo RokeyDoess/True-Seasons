@@ -27,8 +27,7 @@ public final class SeasonClimatePolicy {
     }
     public boolean applies(Season season, String biomeKey) {
         Objects.requireNonNull(season); Objects.requireNonNull(biomeKey);
-        List<String> excluded = season == Season.WINTER ? winter : season == Season.SUMMER ? summer : season == Season.AUTUMN ? autumn : List.of();
-        for (String fragment : excluded) if (biomeKey.contains(fragment)) return false;
+        for (String fragment : exclusions(season)) if (biomeKey.contains(fragment)) return false;
         return true;
     }
     /** Palette fallback only; restoration of previously owned world edits is always allowed. */
@@ -38,6 +37,15 @@ public final class SeasonClimatePolicy {
     }
     public boolean sameWinter(SeasonClimatePolicy other) { return other != null && winter.equals(other.winter); }
     public String signature() { return winter + "/" + summer + "/" + autumn; }
+    public String signature(Season season) { return exclusions(season).toString(); }
+    /** Exempt biomes use the opposite climate's palette, which also affects map pixels. */
+    public Set<Season> paletteSeasons(Season season) {
+        if(exclusions(season).isEmpty())return Set.of(season);
+        return EnumSet.of(season,season==Season.SUMMER?Season.WINTER:Season.SUMMER);
+    }
+    private List<String> exclusions(Season season) {
+        return switch(season){case WINTER->winter;case SUMMER->summer;case AUTUMN->autumn;case SPRING->List.of();};
+    }
     @Override public boolean equals(Object other) {
         return other instanceof SeasonClimatePolicy policy && winter.equals(policy.winter) && summer.equals(policy.summer) && autumn.equals(policy.autumn);
     }

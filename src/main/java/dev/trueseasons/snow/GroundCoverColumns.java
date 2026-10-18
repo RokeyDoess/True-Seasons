@@ -39,7 +39,7 @@ public final class GroundCoverColumns {
     public static GroundCoverColumns decode(byte[] bytes) throws IOException {
         var result = new GroundCoverColumns(); if (bytes == null) return result;
         if (bytes.length > 524288) throw new IOException("Oversized plant metadata");
-        var in = new DataInputStream(new ByteArrayInputStream(bytes));
+        var in = new DataInputStream(new SnapshotInput(bytes));
         if (in.readUnsignedByte() != 1) throw new IOException("Unknown plant metadata schema");
         int count = in.readUnsignedShort(); if (count > 256) throw new IOException("Too many plant snapshots");
         try {
@@ -52,5 +52,25 @@ public final class GroundCoverColumns {
         } catch (IllegalArgumentException ex) { throw new IOException("Invalid plant snapshot", ex); }
         if (in.available() != 0) throw new IOException("Trailing plant metadata");
         return result;
+    }
+    /** Decoder-local source; DataInputStream retains its standard modified-UTF decoding and buffers. */
+    private static final class SnapshotInput extends InputStream {
+        private final byte[] bytes;
+        private int offset;
+        SnapshotInput(byte[] bytes) { this.bytes = bytes; }
+        @Override public int read() { return offset < bytes.length ? bytes[offset++] & 255 : -1; }
+        @Override public int read(byte[] target, int start, int length) {
+            Objects.checkFromIndexSize(start, length, target.length);
+            if (length == 0) return 0;
+            if (offset == bytes.length) return -1;
+            int count = Math.min(length, bytes.length - offset);
+            System.arraycopy(bytes, offset, target, start, count); offset += count;
+            return count;
+        }
+        @Override public long skip(long length) {
+            int count = (int) Math.min(Math.max(0, length), bytes.length - offset);
+            offset += count; return count;
+        }
+        @Override public int available() { return bytes.length - offset; }
     }
 }

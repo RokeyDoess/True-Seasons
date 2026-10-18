@@ -1,6 +1,7 @@
 package dev.trueseasons.presentation;
 
 import dev.trueseasons.visual.AutumnTreeColors;
+import dev.trueseasons.visual.SpringBlossoms;
 import it.unimi.dsi.fastutil.ints.*;
 import it.unimi.dsi.fastutil.shorts.*;
 import java.lang.reflect.*;
@@ -32,13 +33,15 @@ public final class PaperLeafPackets {
         for(int i=0;i<registry.states.length;i++)stateIds.put(registry.states[i],i);
     }
     private static final IntPredicate ALL_BIOMES=id->true;
-    public record Context(long seed,int minY,int maxY,boolean autumn,IntPredicate autumnBiomeAllowed,int autumnCoverage,int springCoverage,boolean springFirst) {
+    public record Context(long seed,int minY,int maxY,boolean autumn,IntPredicate autumnBiomeAllowed,int autumnCoverage,int springCoverage,boolean springFirst,SpringBlossoms blossoms) {
+        public Context(long seed,int minY,int maxY,boolean autumn,IntPredicate allowed,int coverage,int spring,boolean first){this(seed,minY,maxY,autumn,allowed,coverage,spring,first,SpringBlossoms.DEFAULT);}
+        public Context(long seed,int minY,int maxY,boolean autumn,int coverage,int spring,boolean first,SpringBlossoms blossoms){this(seed,minY,maxY,autumn,ALL_BIOMES,coverage,spring,first,blossoms);}
         public Context(long seed,int minY,int maxY,boolean autumn,IntPredicate allowed,int coverage){this(seed,minY,maxY,autumn,allowed,coverage,0,false);}
         public Context(long seed,int minY,int maxY,boolean autumn,IntPredicate allowed){this(seed,minY,maxY,autumn,allowed,256);}
         public Context(long seed,int minY,int maxY,boolean autumn,int coverage){this(seed,minY,maxY,autumn,ALL_BIOMES,coverage);}
         public Context(long seed,int minY,int maxY,boolean autumn,int coverage,int spring,boolean first){this(seed,minY,maxY,autumn,ALL_BIOMES,coverage,spring,first);}
         public Context(long seed,int minY,int maxY,boolean autumn){this(seed,minY,maxY,autumn,ALL_BIOMES);}
-        public Context { Objects.requireNonNull(autumnBiomeAllowed);if(autumnCoverage<0||autumnCoverage>256||springCoverage<0||springCoverage>256)throw new IllegalArgumentException("Invalid tree coverage"); }
+        public Context { Objects.requireNonNull(autumnBiomeAllowed);Objects.requireNonNull(blossoms);if(autumnCoverage<0||autumnCoverage>256||springCoverage<0||springCoverage>256)throw new IllegalArgumentException("Invalid tree coverage"); }
     }
     private static final class Chunk {
         final int x,z,minY,maxY;
@@ -75,6 +78,7 @@ public final class PaperLeafPackets {
             if(Objects.equals(context,next))return;
             cancelRefresh();
             if(context!=null&&(context.seed!=next.seed||context.minY!=next.minY||context.maxY!=next.maxY))clear();
+            if(context!=null&&!context.blossoms.equals(next.blossoms))invalidate();
             // A color-stage change does not change any original tree samples or anchors.
             context=next;chunks.keySet().forEach(this::queue);
         }
@@ -125,10 +129,17 @@ public final class PaperLeafPackets {
                 try{chunk.biomes[section]=BiomeWireCodec.readBiomes(biome);}finally{biome.release();}}
             boolean autumn=context.autumn&&context.autumnBiomeAllowed.test(chunk.biomes[section][cell]);
             if(!autumn&&context.springCoverage==0)return original;
+            // Decorative foliage has a fixed autumn appearance and never blossoms.
+            // Its original state already tells us everything, without a tree session.
+            if(registry.persistent[original]){
+                AutumnTreeColors.Appearance color=!autumn||context.autumnCoverage<128?AutumnTreeColors.Appearance.ORIGINAL
+                        :registry.kind(original).species()==AutumnTreeColors.Species.CHERRY?AutumnTreeColors.Appearance.RED:AutumnTreeColors.Appearance.ORANGE;
+                return registry.painted(original,color);
+            }
             if(session==null)session=new AutumnTreeColors.Session(context.seed,new AutumnTreeColors.Sampler(){
                 public AutumnTreeColors.Kind kindAt(int x,int y,int z){return sample(x,y,z);}
                 public boolean persistentAt(int x,int y,int z){return persistent(x,y,z);}
-            });
+            },context.blossoms);
             AutumnTreeColors.Appearance color;
             resolving=chunk;
             try{
@@ -166,7 +177,11 @@ public final class PaperLeafPackets {
             cancelRefresh(key);
             Chunk previous=chunks.remove(key);if(previous!=null){storedStates-=previous.original.size();clearMissing(previous);}
             if(storedStates+source.original.size()>MAX_TREE_STATES){invalidate();nearby(x,z);return packet;}
-            chunks.put(key,source);storedStates+=source.original.size();invalidate();arrived(key);
+            chunks.put(key,source);storedStates+=source.original.size();
+            // A new chunk only supplies previously UNKNOWN samples, which sessions
+            // never cache. Replacements can change known originals and must reset.
+            if(previous!=null)invalidate();
+            arrived(key);
             if(previous!=null)nearby(x,z);
             if((context.autumn||context.springCoverage>0)&&previous!=null)for(var row:previous.shown.int2IntEntrySet()){
                 int local=row.getIntKey(),before=previous.original.get(local),after=source.original.get(local);

@@ -47,6 +47,17 @@ public final class SeasonColorTransitionTests {
         check(resolver.registryFingerprint().equals(noBlossoms.registryFingerprint()),"Tree toggles do not rebuild or resend the biome registry");
         check(!springState.fingerprint(treeWorld).equals(new SeasonalVisualState(noBlossoms,Season.SPRING,Set.of(treeWorld),Map.of(treeWorld,1L)).fingerprint(treeWorld)),"Disabling blossoms invalidates the spring map endpoint");
         check(new SeasonalVisualState(resolver,Season.SUMMER,Set.of(treeWorld)).fingerprint(treeWorld).equals(new SeasonalVisualState(noBlossoms,Season.SUMMER,Set.of(treeWorld)).fingerprint(treeWorld)),"Disabling blossoms does not request summer map work");
+        config.set("spring-blossoms.enabled",true);config.set("spring-blossoms.leaves-percent",15);
+        var scattered=new SeasonVisualResolver(config);
+        check(resolver.registryFingerprint().equals(scattered.registryFingerprint()),"Blossom density does not resend biome registries");
+        check(!springState.fingerprint(treeWorld).equals(new SeasonalVisualState(scattered,Season.SPRING,Set.of(treeWorld),Map.of(treeWorld,1L)).fingerprint(treeWorld)),"Canopy density changes invalidate the spring map endpoint");
+        check(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(treeWorld)).fingerprint(treeWorld).equals(new SeasonalVisualState(scattered,Season.AUTUMN,Set.of(treeWorld)).fingerprint(treeWorld)),"Spring density changes do not request autumn rendering");
+        config.set("spring-blossoms.leaves-percent",25);config.set("spring-blossoms.enabled",false);
+        for(String key:List.of("trees-percent","leaves-percent"))for(Object invalid:List.of(-1,101,1.5,"20",true,Long.MAX_VALUE)){
+            var malformed=new YamlConfiguration();malformed.set("spring-blossoms."+key,invalid);
+            try{new SeasonVisualResolver(malformed);throw new AssertionError("Invalid spring percentage accepted: "+invalid);}
+            catch(IllegalArgumentException expected){check(expected.getMessage().contains(key),"Invalid spring percentage identifies its setting");}
+        }
         config.set("autumn-trees.enabled",false);var noTrees=new SeasonVisualResolver(config);
         check(resolver.registryFingerprint().equals(noTrees.registryFingerprint()),"Both tree settings are independent from immutable biome aliases");
         check(!new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(treeWorld)).fingerprint(treeWorld).equals(new SeasonalVisualState(noTrees,Season.AUTUMN,Set.of(treeWorld)).fingerprint(treeWorld)),"Autumn tree toggle still invalidates the autumn map endpoint");

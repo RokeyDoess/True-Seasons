@@ -12,15 +12,17 @@ transition:
   # Manual season commands always use the final colors.
   opening-days: 7
 spring-blossoms:
-  # About one third of oak, birch and dark oak trees use native flowering leaves.
-  # The same trees bloom throughout spring; decorative leaves stay unchanged.
+  # Scattered flowers among mostly ordinary oak, birch and dark oak leaves.
+  # The same trees and flowers return each spring; decorative leaves stay unchanged.
   enabled: true
+  trees-percent: 20
+  leaves-percent: 25
 autumn-trees:
   # Client/render-only appearance. Saved leaves, decay and drops stay original.
   # Birch participates; cherry always uses red. No resource pack required.
   enabled: true
 families:
-  evergreen: [taiga, grove]
+  evergreen: [taiga, 'minecraft:grove']
   dry: [savanna, desert, badlands]
   lush: [jungle, swamp, mangrove]
 # Hex RGB grass / foliage, by season and family. Unmatched biomes use temperate.

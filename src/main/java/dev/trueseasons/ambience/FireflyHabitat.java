@@ -14,13 +14,19 @@ public final class FireflyHabitat {
         Cell support=sample.cell(x,groundY,z),space=sample.cell(x,groundY+1,z);
         if(support!=Cell.SOLID||space!=Cell.AIR&&space!=Cell.VEGETATION||sample.cell(x,groundY+2,z)!=Cell.AIR)return false;
         int sky=sample.skyLight(x,groundY+1,z);if(sky<=0)return false;
-        if(sky<15)for(int dx=-1;dx<=1;dx++)for(int dz=-1;dz<=1;dz++)if(dx!=0||dz!=0){
-            Cell nearby=sample.cell(x+dx,groundY+1,z+dz);
-            if(nearby==Cell.VEGETATION||nearby==Cell.LEAVES)return true;
+        if(sky<15){
+            if(space==Cell.VEGETATION)return true;
+            for(int height=3;height<=6;height++)if(sample.cell(x,groundY+height,z)==Cell.LEAVES)return true;
+            for(int dx=-1;dx<=1;dx++)for(int dz=-1;dz<=1;dz++)if(dx!=0||dz!=0){
+                Cell nearby=sample.cell(x+dx,groundY+1,z+dz);
+                if(nearby==Cell.VEGETATION||nearby==Cell.LEAVES||sample.cell(x+dx,groundY+3,z+dz)==Cell.LEAVES)return true;
+            }
         }
-        for(int distance=1;distance<=3;distance++)for(int axis=0;axis<4;axis++){
-            int nx=x+(axis==0?distance:axis==1?-distance:0),nz=z+(axis==2?distance:axis==3?-distance:0);
-            if(sample.cell(nx,groundY,nz)==Cell.WATER||sample.cell(nx,groundY-1,nz)==Cell.WATER)return true;
+        // The complete small disc includes diagonal banks. Four rays miss many
+        // natural shorelines even when water is only a couple of blocks away.
+        for(int distance=1;distance<=3;distance++)for(int dx=-distance;dx<=distance;dx++)for(int dz=-distance;dz<=distance;dz++){
+            if(Math.max(Math.abs(dx),Math.abs(dz))!=distance||dx*dx+dz*dz>9)continue;
+            if(sample.cell(x+dx,groundY,z+dz)==Cell.WATER||sample.cell(x+dx,groundY-1,z+dz)==Cell.WATER)return true;
         }
         return false;
     }

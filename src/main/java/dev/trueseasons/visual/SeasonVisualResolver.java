@@ -13,6 +13,7 @@ public final class SeasonVisualResolver {
     private final boolean enabled;
     private final boolean autumnTrees;
     private final boolean springBlossoms;
+    private final SpringBlossoms blossoms;
     private final boolean gradualColors;
     private final String fingerprint;
     private final String endpointFingerprint;
@@ -32,6 +33,7 @@ public final class SeasonVisualResolver {
         enabled = config.getBoolean("enabled", true);
         autumnTrees = config.getBoolean("autumn-trees.enabled", true);
         springBlossoms=config.getBoolean("spring-blossoms.enabled",true);
+        blossoms=new SpringBlossoms(percent(config,"spring-blossoms.trees-percent",20),percent(config,"spring-blossoms.leaves-percent",25));
         gradualColors=config.getDouble("transition.opening-days",7)>0;
         var section = config.getConfigurationSection("families");
         if (section != null) for (String family : section.getKeys(false)) families.put(family, section.getStringList(family));
@@ -47,7 +49,13 @@ public final class SeasonVisualResolver {
         }
         endpointFingerprint=computeEndpointFingerprint();
         registryFingerprint=digest(endpointFingerprint+"\n"+new TreeMap<>(previous)+"\n"+gradualColors);
-        fingerprint=digest(registryFingerprint+"\n"+autumnTrees+"/"+springBlossoms);
+        fingerprint=digest(registryFingerprint+"\n"+autumnTrees+"/"+springBlossoms+"/"+blossoms.signature());
+    }
+    private static int percent(YamlConfiguration config,String key,int fallback){
+        Object raw=config.get(key,fallback);
+        if(!(raw instanceof Integer||raw instanceof Long)||((Number)raw).longValue()<0||((Number)raw).longValue()>100)
+            throw new IllegalArgumentException(key+" must be a whole number in 0..100");
+        return ((Number)raw).intValue();
     }
     private static int color(String value) {
         if (!value.matches("[0-9a-fA-F]{6}")) throw new IllegalArgumentException("Expected six-digit RGB: " + value);
@@ -75,6 +83,7 @@ public final class SeasonVisualResolver {
     }
     public boolean autumnTrees() { return autumnTrees; }
     public boolean springBlossoms(){return springBlossoms;}
+    public SpringBlossoms blossoms(){return blossoms;}
     public boolean gradualColors(){return gradualColors;}
     public boolean applies(Season season, String biomeKey) { return enabled && climate.applies(season, biomeKey); }
     public String fingerprint() {

@@ -27,7 +27,7 @@ public final class AutumnLeafPacketTests {
         nativeIds=type("net.minecraft.world.level.block.Block").getField("BLOCK_STATE_REGISTRY").get(null);
         air=defaultId("AIR");stone=defaultId("STONE");birch=defaultId("BIRCH_LEAVES");
         birchLog=defaultId("BIRCH_LOG");spruce=defaultId("SPRUCE_LEAVES");cherry=defaultId("CHERRY_LEAVES");oakLog=defaultId("OAK_LOG");
-        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump(); stagedTree(); springTree(); boundedRefresh();
+        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); decorativeStages(); arrivalCacheLifecycle(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump(); stagedTree(); springTree(); boundedRefresh();
         System.out.println("Autumn leaf packet tests passed: "+assertions+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -48,6 +48,42 @@ public final class AutumnLeafPacketTests {
             check(registry.painted(spruce,color)==spruce,"spruce never substituted");
             check(registry.painted(stone,color)==stone,"non-leaf never substituted");
         }
+    }
+    private static void decorativeStages() throws Exception {
+        int[] source=filled(air);List<Integer> leaves=new ArrayList<>();
+        for(String species:List.of("OAK","BIRCH","JUNGLE","ACACIA","DARK_OAK","MANGROVE","CHERRY"))
+            leaves.add(leafVariant(defaultId(species+"_LEAVES"),3,true,true));
+        for(int i=0;i<leaves.size();i++)source[index(i+4,8,8)]=leaves.get(i);
+        Object original=chunk(chunkData(sectionWire(source,4)),0,0);
+        for(int coverage:new int[]{0,1,127,128,255,256})for(boolean allowed:new boolean[]{false,true}){
+            var view=bridge.view();view.context(new PaperLeafPackets.Context(42,0,16,true,id->allowed,coverage,256,true));
+            int[] painted=LeafWireCodec.read(buffer(call(view.chunk(original),"chunkData")),id->true).getFirst().states();
+            for(int i=0;i<leaves.size();i++){
+                int id=leaves.get(i);var color=!allowed||coverage<128?AutumnTreeColors.Appearance.ORIGINAL
+                        :registry.kind(id).species()==AutumnTreeColors.Species.CHERRY?AutumnTreeColors.Appearance.RED:AutumnTreeColors.Appearance.ORANGE;
+                check(painted[index(i+4,8,8)]==registry.painted(id,color),"Decorative foliage preserves its threshold, biome exemption, species and properties during spring/autumn overlap");
+            }
+            view.context(new PaperLeafPackets.Context(42,0,16,false,id->true,0,256,false));
+            drain(view,painted,0,0);check(Arrays.equals(painted,source),"Decorative foliage restores exact originals during spring");
+        }
+    }
+    private static void arrivalCacheLifecycle() throws Exception {
+        int[] source=filled(air);
+        for(int y=0;y<=10;y++)source[index(8,y,8)]=birchLog;
+        for(int x=5;x<=11;x++)for(int z=5;z<=11;z++)for(int y=8;y<=13;y++)if(source[index(x,y,z)]==air)source[index(x,y,z)]=birch;
+        Object original=chunk(chunkData(sectionWire(source,4)),0,0);
+        var view=bridge.view();view.context(new PaperLeafPackets.Context(42,0,16,true));
+        Object first=view.chunk(original);byte[] expected=buffer(call(first,"chunkData")).clone();
+        Object session=field(view,"session");check(session!=null,"Natural foliage prepares a tree session");
+        view.chunk(chunk(chunkData(sectionWire(filled(air),0)),10,10));
+        check(field(view,"session")==session,"Previously unavailable chunk arrivals reuse prepared tree data");
+        view.update(single(8,9,8,stone));
+        check(field(view,"session")==null,"An actual original block edit invalidates prepared tree data");
+        Object restored=view.chunk(original);
+        check(field(view,"session")!=session,"Replacing a known chunk builds a fresh tree session");
+        check(Arrays.equals(expected,buffer(call(restored,"chunkData"))),"Replacing original terrain retains exact seasonal packet data");
+        view.forget(10,10);
+        check(field(view,"session")==null,"Unloading terrain still invalidates prepared tree data");
     }
     private static void paletteShapes() throws Exception {
         for(int shape:new int[]{0,4,8,32}) {
@@ -334,6 +370,11 @@ public final class AutumnLeafPacketTests {
         check(registry.appearance(client[index(0,6,8)])==AutumnTreeColors.Appearance.ORANGE,"An out-of-sequence autumn never retains the spring blossom substitution");
         view.context(new PaperLeafPackets.Context(seed,0,16,false));drain(view,client,1,0);
         check(client[index(0,6,8)]==changed,"Season exit restores exact original leaves and latest properties after spring/autumn changes");
+        view.chunk(chunk(chunkData(sectionWire(west,4)),0,0));
+        view.context(new PaperLeafPackets.Context(seed,0,16,false,0,256,true,new dev.trueseasons.visual.SpringBlossoms(100,100)));drain(view,client,1,0);
+        check(registry.appearance(client[index(0,6,8)])==AutumnTreeColors.Appearance.BLOSSOM,"Configured canopy coverage reaches the packet layer");
+        view.context(new PaperLeafPackets.Context(seed,0,16,false,0,256,true,new dev.trueseasons.visual.SpringBlossoms(100,0)));drain(view,client,1,0);
+        check(client[index(0,6,8)]==changed,"Changing canopy coverage invalidates the old selection without stale flowers");
     }
     private static void decorativeAndBiomes()throws Exception{
         int[] source=filled(air);int placed=leafVariant(birch,7,true,false);

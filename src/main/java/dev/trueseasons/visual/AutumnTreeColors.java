@@ -1,6 +1,7 @@
 package dev.trueseasons.visual;
 
 import java.util.*;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 
 /** Shared presentation-only tree selection. Samplers must return original blocks without loading terrain. */
 public final class AutumnTreeColors {
@@ -79,7 +80,8 @@ public final class AutumnTreeColors {
     public static final class Session {
         private final long worldSeed;
         private final Sampler sampler;
-        private final Map<Position, Kind> samples = bounded(SAMPLE_CACHE);
+        private final SpringBlossoms spring;
+        private final Long2ObjectLinkedOpenHashMap<Kind> samples = new Long2ObjectLinkedOpenHashMap<>(128,0.5f);
         private record Selection(Appearance color,int threshold,boolean blossoms){
             Appearance at(int coverage){return coverage>=threshold?color:Appearance.ORIGINAL;}
         }
@@ -94,7 +96,10 @@ public final class AutumnTreeColors {
         private final ArrayList<Position> firstLayer=new ArrayList<>(),secondLayer=new ArrayList<>(),nearbyLogs=new ArrayList<>();
         private boolean incomplete;
         public Session(long worldSeed, Sampler sampler) {
-            this.worldSeed = worldSeed; this.sampler = Objects.requireNonNull(sampler);
+            this(worldSeed,sampler,SpringBlossoms.DEFAULT);
+        }
+        public Session(long worldSeed,Sampler sampler,SpringBlossoms spring){
+            this.worldSeed = worldSeed; this.sampler = Objects.requireNonNull(sampler);this.spring=Objects.requireNonNull(spring);
         }
         public void invalidate() { samples.clear(); colors.clear(); anchors.clear(); }
         public Appearance appearanceAt(int x, int y, int z) {
@@ -115,7 +120,9 @@ public final class AutumnTreeColors {
         }
         public Appearance springAppearanceAt(int x,int y,int z,int coverage){
             if(coverage<0||coverage>SeasonColorFrame.COMPLETE)throw new IllegalArgumentException("Invalid spring coverage");
-            incomplete=false;if(coverage==0)return Appearance.ORIGINAL;
+            incomplete=false;
+            // Ordinary positions need no tree traversal or sampled block cache.
+            if(coverage==0||spring.treesPercent()==0||!spring.leaf(worldSeed,x,y,z))return Appearance.ORIGINAL;
             Position position=new Position(x,y,z);Kind source=sample(position);
             if(!springEligible(source)||sampler.persistentAt(x,y,z))return Appearance.ORIGINAL;
             Selection selected=colors.get(position);if(selected==null)selected=selection(position,source);
@@ -130,22 +137,36 @@ public final class AutumnTreeColors {
             // Complete, trunkless foliage still participates, just like a planted hedge.
             Appearance color = source.species()==Species.CHERRY?Appearance.RED:anchor == null ? Appearance.ORANGE : color(anchor, source.species());
             int threshold=anchor==null?128:1+(int)Long.remainderUnsigned(mix(worldSeed^mix(anchor.x)^Long.rotateLeft(mix(anchor.z),17)^Long.rotateLeft(mix(anchor.y),39)^0x61c8864680b583ebL),SeasonColorFrame.COMPLETE);
-            boolean blossoms=anchor!=null&&springEligible(source)&&Long.remainderUnsigned(mix(worldSeed^mix(anchor.x)^Long.rotateLeft(mix(anchor.z),23)^Long.rotateLeft(mix(anchor.y),41)^0xa0761d6478bd642fL),3)==0;
+            boolean blossoms=anchor!=null&&springEligible(source)&&spring.tree(mix(worldSeed^mix(anchor.x)^Long.rotateLeft(mix(anchor.z),23)^Long.rotateLeft(mix(anchor.y),41)^0xa0761d6478bd642fL));
             Selection selection=new Selection(color,threshold,blossoms);colors.put(position,selection);
             return selection;
         }
         /** The last query could not resolve its tree using the currently available bounded samples. */
         public boolean incomplete(){return incomplete;}
         private Kind sample(Position position) {
-            Kind cached = samples.get(position);
+            return sample(position.x,position.y,position.z);
+        }
+        private Kind sample(int x,int y,int z) {
+            // Native block coordinates fit without loss. Bypass the cache outside
+            // that range instead of allowing wrapped coordinates to alias a block.
+            if(x < -33_554_432 || x > 33_554_431 || z < -33_554_432 || z > 33_554_431 || y < -2048 || y > 2047)
+                return Objects.requireNonNull(sampler.kindAt(x,y,z));
+            long key=((long)x&0x3ffffffL)<<38|((long)z&0x3ffffffL)<<12|((long)y&0xfffL);
+            Kind cached = samples.getAndMoveToLast(key);
             if (cached != null) return cached;
-            Kind kind = Objects.requireNonNull(sampler.kindAt(position.x, position.y, position.z));
+            Kind kind = Objects.requireNonNull(sampler.kindAt(x,y,z));
             // UNKNOWN may become available without rebuilding this session.
-            if (kind != Kind.UNKNOWN) samples.put(position, kind);
+            if (kind != Kind.UNKNOWN) {
+                samples.putAndMoveToLast(key,kind);
+                if(samples.size()>SAMPLE_CACHE)samples.removeFirst();
+            }
             return kind;
         }
         private Kind searchSample(Position position, SearchBudget budget) {
-            Kind result = budget.remaining-- > 0 ? sample(position) : Kind.UNKNOWN;
+            return searchSample(position.x,position.y,position.z,budget);
+        }
+        private Kind searchSample(int x,int y,int z,SearchBudget budget) {
+            Kind result = budget.remaining-- > 0 ? sample(x,y,z) : Kind.UNKNOWN;
             if (result == Kind.UNKNOWN) budget.incomplete = true;
             return result;
         }
@@ -165,13 +186,12 @@ public final class AutumnTreeColors {
                     if(leafVisits[local]==leafEpoch)continue;
                     leafVisits[local]=leafEpoch;
                     if (++visited > MAX_LEAF_SEARCH) { budget.incomplete=true; return null; }
-                    Position neighbor = new Position(x,y,z);
-                    Kind kind = searchSample(neighbor, budget);
+                    Kind kind = searchSample(x,y,z,budget);
                     if (kind == Kind.UNKNOWN) unavailable = true;
-                    else if (kind.species() == species && kind.log()) nearbyLogs.add(neighbor);
+                    else if (kind.species() == species && kind.log()) nearbyLogs.add(new Position(x,y,z));
                     // A neighboring tree can replace part of a crown with another species.
                     // Traverse leaves of either species, but only matching logs anchor it.
-                    else if (kind.leaves()) next.add(neighbor);
+                    else if (kind.leaves()) next.add(new Position(x,y,z));
                 }
                 if (unavailable) return null;
                 if (!nearbyLogs.isEmpty()) {

@@ -174,7 +174,7 @@ final class BlueMapSeasonalColors implements AutoCloseable {
                     return persistent;
                 }catch(Throwable failure){throw new IllegalStateException("Cannot sample decorative leaves",failure);}
               }
-            });
+            },visualState.resolver().blossoms());
             proxy = Proxy.newProxyInstance(worldClass.getClassLoader(), new Class<?>[]{worldClass}, (object,method,args) -> {
                 if (method.getName().equals("getChunkAtBlock")) return wrapChunk(originalChunk((int)args[0],(int)args[1]));
                 if (method.getName().equals("getChunk")) return wrapChunk(originalChunk((int)args[0]<<4,(int)args[1]<<4));

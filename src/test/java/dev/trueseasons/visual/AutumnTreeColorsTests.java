@@ -27,7 +27,7 @@ public final class AutumnTreeColorsTests {
         }
     }
     public static void main(String[] args) throws Exception {
-        classification(); wholeTrees(); touchingCrowns(); decorative(); crossChunk(); branches(); bounded(); invalidation(); stages(); spring(); scratchReuse();
+        classification(); wholeTrees(); touchingCrowns(); decorative(); crossChunk(); branches(); bounded(); invalidation(); stages(); spring(); scratchReuse(); sampleCache();
         System.out.println("Autumn tree colors: " + checks + " assertions passed");
     }
     private static void classification() {
@@ -180,20 +180,28 @@ public final class AutumnTreeColorsTests {
         check(changes.size()>2,"Different trees change at different times");
     }
     private static void spring(){
-        int flowering=0;World selected=null;long selectedSeed=0;
+        int flowering=0,flowers=0,totalSelectedLeaves=0;World selected=null;long selectedSeed=0;Position selectedLeaf=null;
         for(int i=0;i<600;i++){
             World world=new World();world.tree(0,0,"birch");Session view=new Session(i,world);
-            Appearance bloom=view.springAppearanceAt(1,5,0,256);
-            check(bloom==new Session(i,world).springAppearanceAt(1,5,0,256),"Spring tree selection survives new sessions");
-            if(bloom==Appearance.BLOSSOM){flowering++;selected=world;selectedSeed=i;}
-            if(i<12)for(var row:world.blocks.entrySet())if(row.getValue().leaves()){
-                Position p=row.getKey();check(view.springAppearanceAt(p.x,p.y,p.z,256)==bloom,"Whole spring tree shares one blossom decision");
+            int count=0,leaves=0;Position flower=null;Session restarted=new Session(i,world);
+            for(var row:world.blocks.entrySet())if(row.getValue().leaves()){
+                Position p=row.getKey();leaves++;Appearance appearance=view.springAppearanceAt(p.x,p.y,p.z,256);
+                if(appearance==Appearance.BLOSSOM){count++;flower=p;}
+                if(i<12)check(appearance==restarted.springAppearanceAt(p.x,p.y,p.z,256),"Scattered blossoms survive new sessions and query order");
             }
+            if(count>0){flowering++;flowers+=count;totalSelectedLeaves+=leaves;selected=world;selectedSeed=i;selectedLeaf=flower;
+                check(count<leaves/2,"A selected tree keeps predominantly ordinary leaves");}
         }
-        check(flowering>160&&flowering<240,"Approximately one third of eligible trees blossom: "+flowering+" / 600");
-        Session stable=new Session(selectedSeed,selected);check(stable.springAppearanceAt(1,5,0,0)==Appearance.ORIGINAL,"Opening spring begins without blossoms");
-        check(stable.springAppearanceAt(1,5,0,256)==Appearance.BLOSSOM,"Selected tree blossoms by the end of the opening window");
-        check(stable.springAppearanceAt(1,5,0,0)==Appearance.ORIGINAL,"Leaving spring removes the presentation without touching leaves");
+        check(flowering>90&&flowering<150,"Approximately one fifth of eligible trees blossom: "+flowering+" / 600");
+        check(flowers>totalSelectedLeaves*.20&&flowers<totalSelectedLeaves*.30,"Selected crowns have about one quarter flowering leaves");
+        Session stable=new Session(selectedSeed,selected);Position p=selectedLeaf;
+        check(stable.springAppearanceAt(p.x,p.y,p.z,0)==Appearance.ORIGINAL,"Opening spring begins without blossoms");
+        check(stable.springAppearanceAt(p.x,p.y,p.z,256)==Appearance.BLOSSOM,"Selected flowers appear by the end of the opening window");
+        check(stable.springAppearanceAt(p.x,p.y,p.z,0)==Appearance.ORIGINAL,"Leaving spring removes the presentation without touching leaves");
+        for(var row:selected.blocks.entrySet())if(row.getValue().leaves()){
+            Position at=row.getKey();check(new Session(selectedSeed,selected,new SpringBlossoms(0,100)).springAppearanceAt(at.x,at.y,at.z,256)==Appearance.ORIGINAL,"Zero tree selection disables flowers");
+            check(new Session(selectedSeed,selected,new SpringBlossoms(100,0)).springAppearanceAt(at.x,at.y,at.z,256)==Appearance.ORIGINAL,"Zero canopy coverage disables flowers");
+        }
         for(String species:List.of("jungle","acacia","mangrove","cherry")){
             World world=new World();world.tree(0,0,species);check(new Session(1,world).springAppearanceAt(1,5,0,256)==Appearance.ORIGINAL,"Spring preserves "+species+" native appearance");
         }
@@ -224,5 +232,34 @@ public final class AutumnTreeColorsTests {
         check(shared.appearanceAt(leaf.x,leaf.y,leaf.z)==Appearance.ORIGINAL,"Reused scratch does not invent a source leaf in unavailable terrain");
         world.unavailableChunks.clear();shared.invalidate();
         check(shared.appearanceAt(leaf.x,leaf.y,leaf.z)==new Session(123,world).appearanceAt(leaf.x,leaf.y,leaf.z),"Invalidation still recovers after terrain returns");
+    }
+    private static void sampleCache() throws Exception {
+        int[] reads={0};
+        Session cache=new Session(1,(x,y,z)->{reads[0]++;return Kind.OTHER;});
+        for(int x=0;x<20000;x++)cache.appearanceAt(x,80,0);
+        var field=Session.class.getDeclaredField("samples");field.setAccessible(true);
+        check(((Map<?,?>)field.get(cache)).size()==16384,"Sampling cache retains its existing maximum even after long travel");
+        int before=reads[0];cache.appearanceAt(19999,80,0);
+        check(reads[0]==before,"Most recently sampled original terrain is reused");
+        cache.appearanceAt(0,80,0);
+        check(reads[0]==before+1,"Old samples are evicted rather than growing the cache");
+        cache.invalidate();cache.appearanceAt(19999,80,0);
+        check(reads[0]==before+2,"Invalidation discards cached original terrain");
+        Session zero=new Session(1,(x,y,z)->x==0&&y==0&&z==0?Kind.CHERRY_LEAVES:Kind.OTHER);
+        check(zero.appearanceAt(0,0,0)==Appearance.RED,"Zero-valued packed coordinates remain usable");
+        for(int[] point:new int[][]{{1,80,1},{-33_554_432,-2048,-33_554_432},{33_554_431,2047,33_554_431}}){
+            Session bounds=new Session(1,(x,y,z)->x==point[0]&&y==point[1]&&z==point[2]?Kind.CHERRY_LEAVES:Kind.OTHER);
+            check(bounds.appearanceAt(point[0],point[1],point[2])==Appearance.RED,"Native coordinate boundaries retain their exact originals");
+            for(int axis=0;axis<3;axis++){
+                int[] different=point.clone();different[axis]+=axis==1?4096:67_108_864;
+                check(bounds.appearanceAt(different[0],different[1],different[2])==Appearance.ORIGINAL,"Coordinates outside the native range cannot alias a cached block");
+            }
+        }
+        Session extended=new Session(1,(x,y,z)->x==Integer.MAX_VALUE-10&&y==5000&&z==Integer.MIN_VALUE+10?Kind.CHERRY_LEAVES:Kind.OTHER);
+        check(extended.appearanceAt(Integer.MAX_VALUE-10,5000,Integer.MIN_VALUE+10)==Appearance.RED,"Unpackable coordinates still resolve through the original sampler");
+        int[] attempts={0};Session arrivals=new Session(1,(x,y,z)->++attempts[0]==1?Kind.UNKNOWN:Kind.CHERRY_LEAVES);
+        check(arrivals.appearanceAt(0,0,0)==Appearance.ORIGINAL,"Unavailable originals remain unavailable");
+        check(arrivals.appearanceAt(0,0,0)==Appearance.RED&&attempts[0]==2,"An unavailable sample is retried without invalidation");
+        arrivals.appearanceAt(0,0,0);check(attempts[0]==2,"A subsequently available original can be cached");
     }
 }

@@ -8,6 +8,7 @@ import java.util.concurrent.*;
 import org.bukkit.*;
 import org.bukkit.event.*;
 import org.bukkit.event.world.*;
+import com.destroystokyo.paper.event.server.ServerTickEndEvent;
 
 /** One processing framework for seasonal jobs AND uninstall restoration. */
 public final class ChunkMigrationEngine implements Listener, AutoCloseable {
@@ -143,12 +144,16 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     private int applicationTick = -1, applications;
     private long applicationNanos;
     private final TpsPoller tps = new TpsPoller(() -> Bukkit.getTPS()[0]);
+    private final RecentTickHeadroom headroom=new RecentTickHeadroom();
     public ChunkMigrationEngine(TrueSeasonsPlugin plugin) {
         this.plugin = plugin;
         Bukkit.getPluginManager().registerEvents(this, plugin);
     }
     public Collection<Job> jobs() { return Collections.unmodifiableCollection(jobs.values()); }
     public double currentTps() { return tps.read(System.currentTimeMillis()); }
+    public boolean waitingForTickTime(){return plugin.settings().minTps>0&&headroom.waiting();}
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void tickEnded(ServerTickEndEvent event){headroom.observe(event.getTickDuration(),plugin.settings().millis);}
     /** No loads or disk reads: render readiness follows the current migration generation. */
     public boolean regionReady(UUID world, int regionX, int regionZ) {
         Job job = jobs.get(world);
@@ -277,7 +282,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         long indexStarted = System.nanoTime();
         long indexDeadline = System.nanoTime() + (long) (Math.min(1.0, plugin.settings().millis) * 1_000_000);
         for (Job job : jobs.values()) {
-            applyIndex(job, indexDeadline);
+            if(!waitingForTickTime())applyIndex(job, indexDeadline);
             if (job.rescanDue(now,plugin.settings().rescanSeconds)) scan(job);
             for (var iterator = job.failures.entrySet().iterator(); iterator.hasNext();) {
                 var failure = iterator.next();
@@ -291,7 +296,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         if(allFinished()) { checkCompletion(); return; }
         if (!allFinished() && !plugin.state().paused && (plugin.state().cleanup || plugin.settings().enabled))
             cachedLowTps = currentTps() < plugin.settings().minTps;
-        if (plugin.state().paused || (!plugin.state().cleanup && !plugin.settings().enabled) || lowTps()) return;
+        if (plugin.state().paused || (!plugin.state().cleanup && !plugin.settings().enabled) || lowTps() || waitingForTickTime()) return;
 
         long deadline = System.nanoTime() + Math.max(0L, (long) (plugin.settings().millis * 1_000_000) - applicationNanos);
 
@@ -345,7 +350,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
             }
             job.observedFull.add(pos); job.unavailable.remove(pos);
             if (job.done.contains(pos)) return;
-            if (!job.world.isChunkLoaded(pos.x(), pos.z()) || plugin.state().paused || lowTps()) { enqueue(job, pos);  return; }
+            if (!job.world.isChunkLoaded(pos.x(), pos.z()) || plugin.state().paused || lowTps() || waitingForTickTime()) { enqueue(job, pos);  return; }
             int currentTick = Bukkit.getCurrentTick();
             if (applicationTick != currentTick) { applicationTick = currentTick; applications = 0; applicationNanos = 0; }
             if (applications >= plugin.settings().perTick || applicationNanos >= plugin.settings().millis * 1_000_000) {

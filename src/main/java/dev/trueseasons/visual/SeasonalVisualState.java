@@ -23,6 +23,6 @@ public record SeasonalVisualState(SeasonVisualResolver resolver, Season season, 
         if(!active(world))return "vanilla";
         return season.key()+"/"+resolver.endpointFingerprint()
             +(season==Season.AUTUMN?"/trees="+resolver.autumnTrees()+(resolver.autumnTrees()?"/"+Long.toUnsignedString(seed(world)):""):"")
-            +(season==Season.SPRING?"/blossoms="+resolver.springBlossoms()+(resolver.springBlossoms()?"/"+Long.toUnsignedString(seed(world)):""):"");
+            +(season==Season.SPRING?"/blossoms="+resolver.springBlossoms()+(resolver.springBlossoms()?"/"+resolver.blossoms().signature()+"/"+Long.toUnsignedString(seed(world)):""):"");
     }
 }

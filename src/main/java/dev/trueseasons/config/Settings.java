@@ -40,6 +40,8 @@ public final class Settings {
             files.put(name, yaml);
         }
         var main = files.get("config"); var cal = files.get("calendar"); var sn = files.get("snow");
+        boolean summerDefaultsMigrated=BiomeDefaults.upgradeSummer(main);
+        boolean evergreenDefaultsMigrated=BiomeDefaults.upgradeFamilies(files.get("visuals"));
         var integrations = files.get("integrations");
         Map<Season, List<Integer>> months = new EnumMap<>(Season.class);
         for (Season season : Season.values()) months.put(season, cal.getIntegerList("months." + season.key()));
@@ -121,10 +123,11 @@ public final class Settings {
             var yaml = entry.getValue();
             var defaults = YamlConfiguration.loadConfiguration(new InputStreamReader(
                 Objects.requireNonNull(plugin.getResource(entry.getKey() + ".yml")), StandardCharsets.UTF_8));
-            boolean changed = entry.getKey().equals("snow") && (legacySnowMigrated||legacyMeltTimer) || entry.getKey().equals("weather") && (legacyParticles||legacyStormTimer);
+            boolean changed = entry.getKey().equals("snow") && (legacySnowMigrated||legacyMeltTimer) || entry.getKey().equals("weather") && (legacyParticles||legacyStormTimer)
+                ||entry.getKey().equals("config")&&summerDefaultsMigrated||entry.getKey().equals("visuals")&&evergreenDefaultsMigrated;
             if(entry.getKey().equals("weather")&&legacyStormTimer)yaml.setComments("winter-storm.start-on-winter",defaults.getComments("winter-storm.start-on-winter"));
             if (entry.getKey().equals("weather") && legacyParticles) yaml.setComments("snowfall.enabled", defaults.getComments("snowfall.enabled"));
-            if (changed) {
+            if (changed&&entry.getKey().equals("snow")) {
                 yaml.setComments("surface-mode", defaults.getComments("surface-mode"));
                 yaml.setComments("surface-materials", defaults.getComments("surface-materials"));
             }

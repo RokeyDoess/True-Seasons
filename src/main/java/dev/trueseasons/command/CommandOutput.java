@@ -22,10 +22,11 @@ final class CommandOutput {
         if(plugin.state().clean)return "RESTORED";
         if(plugin.state().paused)return "PAUSED";
         if(indexing())return "READING SAVED PROGRESS";
-        if(plugin.melting()&&plugin.state().meltColumns>0)return "SNOWMELT";
         if(plugin.engine().worldEditsComplete())return plugin.integrations().pending()>0?"TERRAIN COMPLETE — MAP PENDING":"COMPLETE";
         if(!plugin.settings().enabled)return "DISABLED";
         if(plugin.engine().currentTps()<plugin.settings().minTps)return "WAITING FOR TPS";
+        if(plugin.engine().waitingForTickTime())return "WAITING FOR TICK TIME";
+        if(plugin.melting()&&plugin.state().meltColumns>0)return "SNOWMELT";
         if(plugin.melting())return "RESTORING TERRAIN";
         return "MIGRATING";
     }

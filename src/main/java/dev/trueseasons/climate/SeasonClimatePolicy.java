@@ -6,7 +6,7 @@ import java.util.*;
 /** Immutable biome-key policy shared by physical snow and client precipitation. */
 public final class SeasonClimatePolicy {
     public static final List<String> HOT = List.of("desert", "badlands", "savanna", "jungle", "warm_ocean");
-    public static final List<String> COLD = List.of("snowy", "frozen", "ice_spikes", "grove", "jagged_peaks", "cold_ocean");
+    public static final List<String> COLD = List.of("snowy", "frozen", "ice_spikes", "minecraft:grove", "jagged_peaks", "cold_ocean");
     public static final SeasonClimatePolicy ALL = new SeasonClimatePolicy(List.of(), List.of());
     private final List<String> winter, summer, autumn;
     public SeasonClimatePolicy(List<String> winter, List<String> summer) {

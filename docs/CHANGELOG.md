@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- Let terrain migration back off after busy ticks and resume automatically once the server recovers. Migration status explains this brief wait.
+- Scatter spring blossoms among mostly ordinary leaves on about one in five eligible trees. Tree and flower coverage can be adjusted separately.
+- Help summer fireflies find sheltered greenery and natural shorelines, including diagonal water edges, while keeping their shared particle limit.
+- Restore summer effects in cherry groves and mangrove swamps, and give them their intended seasonal colors. Unchanged default settings upgrade automatically.
+- Reduce repeated tree searches and temporary memory use when coloring forests, hedges and newly loaded chunks.
+
 ## 0.3.1
 
 - Share foliage catch-up work fairly between players, with adjustable limits for busy servers and dense forests.

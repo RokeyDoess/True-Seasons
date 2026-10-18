@@ -1,6 +1,6 @@
 # True Seasons
 
-[![Latest prerelease: v0.3.1](https://img.shields.io/badge/prerelease-v0.3.1-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.1)
+[![Latest prerelease: v0.3.2](https://img.shields.io/badge/prerelease-v0.3.2-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.2)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -11,11 +11,11 @@ True Seasons brings seasons to the world you've already built, using Minecraft's
 
 **No resource pack. No client mod.** Players join with ordinary Minecraft.
 
-**Latest prerelease: [0.3.1](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.1).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
+**Latest prerelease: [0.3.2](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.2).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 
 ## Seasons that feel like Minecraft
 
-- **Spring in bloom.** A fixed third of suitable oak, birch and dark oak trees blossom each spring. Their original leaves and drops stay unchanged.
+- **Spring in bloom.** Scattered blossoms appear among the ordinary leaves of about one in five suitable oak, birch and dark oak trees. Their original leaves and drops stay unchanged.
 - **Summer after sunset.** Sparse fireflies appear near water and sheltered greenery at dusk and night. Oceans are excluded, and added sounds are off by default.
 - **Autumn from tree to tree.** Oak and birch trees can take on different yellow, orange or red colors within the same forest. Each tree keeps its color between visits. Cherry turns red, spruce stays evergreen, and player-built hedges and decorative leaves join in.
 - **Native snowfall and real snow cover.** Winter rain uses Minecraft's own snowfall. Snow settles on exposed terrain, rooftops and tree canopies, while grass, flowers and leaf litter make way for winter.
@@ -37,7 +37,7 @@ Broken snow gets a refill delay, giving players time to dig. Terrain updates res
 
 True Seasons is a heavier plugin by nature. Changing real terrain across a large world takes work, and BlueMap rendering adds to that cost. Keeping that work efficient is a core part of the plugin's design.
 
-Terrain updates run in small, configurable batches and pause below **18.5 TPS** by default. Snow previews and foliage catch-up use server-wide update budgets to limit extra work as more players connect. Map changes are combined, and completed regions are saved before their render is requested. Gradual snow previews add no extra BlueMap renders.
+Terrain updates run in small, configurable batches, back off after busy ticks and pause below **18.5 TPS** by default. Snow previews and foliage catch-up use server-wide update budgets to limit extra work as more players connect. Map changes are combined, and completed regions are saved before their render is requested. Gradual snow previews add no extra BlueMap renders.
 
 World discovery runs in the background and avoids repeated file opens for individual chunks. Chunk tracking also handles dense generated areas efficiently, reducing the work needed to find and resume saved progress.
 

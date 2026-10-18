@@ -30,11 +30,13 @@ BlueMap shows the full seasonal colors and receives no extra renders for the int
 
 ### Spring blossoms and summer fireflies
 
-About one third of oak, birch and dark oak trees display Minecraft's flowering azalea leaves in spring. The selection stays fixed throughout the season and across restarts. Whole trees blossom and return to normal at different times during the calendar's opening window. Decorative and unresolved foliage keeps its ordinary spring appearance; cherry trees already have blossoms, and evergreen and tropical tree types stay unchanged.
+About one fifth of oak, birch and dark oak trees display scattered flowers in spring. Most leaves stay ordinary, even on flowering trees. The trees and flower positions stay fixed across visits and restarts, and each tree opens during the calendar's color transition. Decorative and unresolved foliage keeps its ordinary spring appearance; cherry trees already have blossoms, and evergreen and tropical tree types stay unchanged.
 
-Blossoms change appearance only. Leaves keep their saved type, properties, decay and drops, and BlueMap shows the same spring selection. Set `spring-blossoms.enabled: false` in `visuals.yml` to disable them. Changing this setting does not require clients to receive new biome colors.
+Blossoms change appearance only. Leaves keep their saved type, properties, decay and drops, and BlueMap shows the same flowers. In `visuals.yml`, `spring-blossoms.trees-percent` controls how many trees bloom and `leaves-percent` controls flowers within those trees; the defaults are 20 and 25. Set `enabled: false` in that section to disable them. These settings do not require clients to receive new biome colors.
 
 Summer adds sparse native fireflies at dusk and night, near land beside water or sheltered vegetation. Oceans, caves, rain and summer-exempt cold biomes are excluded. There are no new entities, extra pollen or petal particles, or saved world changes. Sounds are off by default.
+
+Cherry groves and mangrove swamps take part in summer. The default cold-biome exclusion is `minecraft:grove`, which avoids matching those names too. Unchanged older defaults upgrade automatically; customized biome lists stay as written.
 
 Control fireflies in `ambience.yml`. Their sampling attempts and particles share a server-wide allowance across players, including failed habitat checks. The defaults allow 16 attempts and at most eight particles once per second, within 24 blocks of players. Work pauses below the configured TPS threshold and samples only loaded chunks. Fireflies have their own toggle and do not depend on seasonal weather being enabled.
 
@@ -94,7 +96,7 @@ Saved-world discovery runs in the background and reuses each region file while c
 
 Each generated file explains its options.
 
-Terrain migration controls are in `config.yml`: `migration.max-chunks-per-tick`, `migration.max-millis-per-tick` and `migration.max-concurrent-chunks` limit application work and outstanding loads. `migration.pause-below-tps` defaults to 18.5. Snow preview limits are separate in `snow.yml`, and BlueMap's render limits are in `integrations.yml`. Lower limits reduce the work admitted at once but extend the transition. Time budgets are scheduling targets; an individual operation can take longer.
+Terrain migration controls are in `config.yml`: `migration.max-chunks-per-tick`, `migration.max-millis-per-tick` and `migration.max-concurrent-chunks` limit application work and outstanding loads. `migration.pause-below-tps` defaults to 18.5. Migration also waits after busy individual ticks and resumes after two healthy ticks, without saving a manual pause; commands show `WAITING FOR TICK TIME`. Setting the TPS threshold to zero disables both performance guards. Snow preview limits are separate in `snow.yml`, and BlueMap's render limits are in `integrations.yml`. Lower limits reduce the work admitted at once but extend the transition. Time budgets are scheduling targets; an individual operation can take longer.
 
 | File | Controls |
 | --- | --- |

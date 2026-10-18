@@ -207,7 +207,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         int spring=season==null?0:frame!=null&&frame.to()==season?frame.springCoverage():season==Season.SPRING?256:0;
         return new PaperLeafPackets.Context(world.getSeed(), world.getMinHeight(), world.getMaxHeight(),
             resolver != null && resolver.enabled() && resolver.autumnTrees() && autumn>0,autumn,
-            resolver!=null&&resolver.enabled()&&resolver.springBlossoms()?spring:0,season==Season.SPRING);
+            resolver!=null&&resolver.enabled()&&resolver.springBlossoms()?spring:0,season==Season.SPRING,
+            resolver==null?dev.trueseasons.visual.SpringBlossoms.DEFAULT:resolver.blossoms());
     }
     private void refreshLeafWorlds() {
         if (leafPackets == null) return;

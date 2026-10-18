@@ -13,6 +13,7 @@ migration:
   # Limit application work as well as concurrent loading.
   max-chunks-per-tick: 1
   max-millis-per-tick: 3.0
+  # Also wait briefly after busy individual ticks. Set 0 to disable both guards.
   pause-below-tps: 18.5
   # Legacy setting retained for compatibility. Storms now follow visible chunks.
   player-radius-chunks: 4
@@ -27,4 +28,4 @@ climate:
   # Match fragments of biome registry keys. [] permits winter in all biomes.
   winter-excluded-biome-fragments: [desert, badlands, savanna, jungle, warm_ocean]
   # Cold biomes keep their normal colours during summer.
-  summer-excluded-biome-fragments: [snowy, frozen, ice_spikes, grove, jagged_peaks, cold_ocean]
+  summer-excluded-biome-fragments: [snowy, frozen, ice_spikes, 'minecraft:grove', jagged_peaks, cold_ocean]

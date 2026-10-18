@@ -30,7 +30,9 @@ public final class SummerFireflyService {
             var settings=plugin.settings();var limits=settings.fireflies;var random=ThreadLocalRandom.current();
             World world=player.getWorld();if(!plugin.eligible(world)||!FireflyHabitat.night(world.getTime())||world.hasStorm())return false;
             var position=player.getLocation();
-            int x=position.getBlockX()+random.nextInt(-limits.radius(),limits.radius()+1),z=position.getBlockZ()+random.nextInt(-limits.radius(),limits.radius()+1);
+            // Favor visible nearby habitat, while still sampling the whole radius.
+            int radius=random.nextInt(4)==0?limits.radius():Math.max(4,(limits.radius()+1)/2);
+            int x=position.getBlockX()+random.nextInt(-radius,radius+1),z=position.getBlockZ()+random.nextInt(-radius,radius+1);
             if(!world.isChunkLoaded(x>>4,z>>4))return false;
             int y=world.getHighestBlockYAt(x,z,HeightMap.MOTION_BLOCKING_NO_LEAVES);
             if(Math.abs(y-position.getY())>12||y<world.getMinHeight()||y+2>=world.getMaxHeight())return false;

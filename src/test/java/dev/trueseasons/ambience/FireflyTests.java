@@ -22,6 +22,12 @@ public final class FireflyTests {
         check(!FireflyHabitat.ocean("minecraft:river"),"River edges remain eligible");
         Sample edge=new Sample();edge.set(0,64,0,SOLID);edge.set(2,63,0,WATER);
         check(FireflyHabitat.suitable(edge,0,64,0),"Loaded land near water is habitat");
+        Sample diagonal=new Sample();diagonal.set(0,64,0,SOLID);diagonal.set(2,63,2,WATER);
+        check(FireflyHabitat.suitable(diagonal,0,64,0),"Diagonal shorelines qualify without terrain loads");
+        Sample canopy=new Sample();canopy.set(0,64,0,SOLID);canopy.set(0,68,0,LEAVES);canopy.sky=10;
+        check(FireflyHabitat.suitable(canopy,0,64,0),"Leaves above clear particle space provide sheltered habitat");
+        canopy.blocks.clear();canopy.set(0,64,0,SOLID);canopy.set(0,65,0,VEGETATION);
+        check(FireflyHabitat.suitable(canopy,0,64,0),"Sheltered vegetation at the particle site counts too");
         Sample open=new Sample();open.set(0,64,0,SOLID);open.set(1,65,0,VEGETATION);
         check(!FireflyHabitat.suitable(open,0,64,0),"Open dry vegetation is not enough");open.sky=11;
         check(FireflyHabitat.suitable(open,0,64,0),"Sheltered vegetation is habitat");open.sky=0;
@@ -30,7 +36,7 @@ public final class FireflyTests {
         edge.set(0,64,0,SOLID);edge.set(0,66,0,SOLID);check(!FireflyHabitat.suitable(edge,0,64,0),"Particle space must be clear");
         Sample unloaded=new Sample();unloaded.set(0,64,0,SOLID);unloaded.sky=10;
         for(int x=-3;x<=3;x++)for(int z=-3;z<=3;z++)if(x!=0||z!=0)unloaded.set(x,64,z,UNAVAILABLE);
-        check(!FireflyHabitat.suitable(unloaded,0,64,0)&&unloaded.reads<=40,"Unavailable neighbors never qualify and sample work stays fixed");
+        check(!FireflyHabitat.suitable(unloaded,0,64,0)&&unloaded.reads<=96,"Unavailable neighbors never qualify and sample work stays fixed");
         List<Integer> viewers=new ArrayList<>();for(int i=0;i<100;i++)viewers.add(i);Set<Integer> visited=new HashSet<>();int cursor=0;
         for(int cycle=0;cycle<20;cycle++){
             var usage=FireflyBudget.visit(viewers,cursor,16,8,viewer->{visited.add(viewer);return true;});cursor=usage.nextViewer();

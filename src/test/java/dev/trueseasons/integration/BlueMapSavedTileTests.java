@@ -191,6 +191,7 @@ public final class BlueMapSavedTileTests {
         source.put(4,8,0,"minecraft:flowering_azalea_leaves[distance=1,persistent=false,waterlogged=false]");
         check(Arrays.equals(blossoms,render(map,storage,4,0,lowres)),"Saved spring blossom geometry/materials exactly match native flowering leaves");
         check(blossomLow==lowres.get("4,0"),"Saved spring lowres color matches native flowering leaves");
+        scatteredSpring(pack,gallery,settings,output,config);
         source.blocks.clear();source.blocks.putAll(original);
         hook.update(new SeasonalVisualState(resolver,Season.AUTUMN,Set.of(id),Map.of(id,1234L)));
         source.biome=(Biome)Proxy.newProxyInstance(Biome.class.getClassLoader(),new Class<?>[]{Biome.class},(proxy,method,arguments)->
@@ -208,6 +209,31 @@ public final class BlueMapSavedTileTests {
         System.out.println("BlueMap saved tile tests passed: "+assertions+" assertions; tiles: "+output);
         if(args.length>1&&args[1].equals("--benchmark")) benchmark(pack,gallery,settings,output);
         if(args.length>2&&args[1].equals("--mca-benchmark")) mcaBenchmark(pack,gallery,settings,output,resources,Path.of(args[2]));
+    }
+    private static void scatteredSpring(ResourcePack pack,TextureGallery gallery,RenderSettings settings,Path folder,YamlConfiguration config)throws Exception{
+        SavedWorld forest=new SavedWorld();
+        String properties="[distance=1,persistent=false,waterlogged=false]";
+        for(int x=6;x<=10;x++)for(int z=6;z<=10;z++)for(int y=5;y<=7;y++)forest.put(x,y,z,"minecraft:birch_leaves"+properties);
+        for(int y=0;y<=5;y++)forest.put(8,y,8,"minecraft:birch_log");
+        var originals=Map.copyOf(forest.blocks);long seed=0;AutumnTreeColors.Session selection;
+        for(;;seed++){
+            selection=new AutumnTreeColors.Session(seed,(x,y,z)->AutumnTreeColors.kind(originals.getOrDefault(x+","+y+","+z,BlockState.AIR).getId().toString()));
+            if(selection.springAppearanceAt(6,5,6,256)==AutumnTreeColors.Appearance.BLOSSOM)break;
+        }
+        UUID world=UUID.randomUUID();SavedTiles saved=new SavedTiles(folder.resolve("scattered"));Files.createDirectories(saved.folder);
+        NativeMap map=new NativeMap(forest,saved,pack,gallery,settings,new Grid(32));var hook=new BlueMapSeasonalColors(map,world);
+        hook.update(new SeasonalVisualState(new SeasonVisualResolver(config),Season.SPRING,Set.of(world),Map.of(world,seed)));
+        var lowres=new HashMap<String,Integer>();byte[] actual=render(map,saved,0,0,lowres);int actualLow=lowres.get("0,0");int flowers=0,ordinary=0;
+        for(var row:originals.entrySet()){
+            if(!AutumnTreeColors.kind(row.getValue().getId().toString()).leaves())continue;
+            String[] xyz=row.getKey().split(",");int x=Integer.parseInt(xyz[0]),y=Integer.parseInt(xyz[1]),z=Integer.parseInt(xyz[2]);
+            if(selection.springAppearanceAt(x,y,z,256)==AutumnTreeColors.Appearance.BLOSSOM){forest.put(x,y,z,AutumnTreeColors.Appearance.BLOSSOM.blockKey()+properties);flowers++;}else ordinary++;
+        }
+        check(flowers>0&&ordinary>flowers,"Saved spring canopy keeps ordinary leaves among scattered flowers");
+        var nativeConfig=new YamlConfiguration();for(String key:config.getKeys(true))if(!config.isConfigurationSection(key))nativeConfig.set(key,config.get(key));nativeConfig.set("spring-blossoms.enabled",false);
+        hook.update(new SeasonalVisualState(new SeasonVisualResolver(nativeConfig),Season.SPRING,Set.of(world),Map.of(world,seed)));
+        check(Arrays.equals(actual,render(map,saved,0,0,lowres)),"Full saved spring canopy exactly matches native mixed flowering and ordinary leaves");
+        check(actualLow==lowres.get("0,0"),"Mixed spring lowres color matches the same native blocks and seasonal biome");hook.close();
     }
     private static void benchmark(ResourcePack pack,TextureGallery gallery,RenderSettings settings,Path folder) throws Exception {
         SavedWorld forest=new SavedWorld();

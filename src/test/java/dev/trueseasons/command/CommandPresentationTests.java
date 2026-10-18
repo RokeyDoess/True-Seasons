@@ -69,6 +69,7 @@ public final class CommandPresentationTests {
         IntegrationManager integrations = allocate(IntegrationManager.class); set(integrations, "blueMap", maps);
         ChunkMigrationEngine engine = allocate(ChunkMigrationEngine.class); set(engine, "plugin", plugin); set(engine, "jobs", Map.of(id, job));
         set(engine, "tps", new TpsPoller(() -> 20));
+        var headroom=new dev.trueseasons.migration.RecentTickHeadroom();set(engine,"headroom",headroom);
         set(plugin, "state", state); set(plugin, "settings", settings); set(plugin, "weather", weather);
         set(plugin, "integrations", integrations); set(plugin, "engine", engine); set(plugin, "season", Season.WINTER); set(plugin, "version", "fixture-winter");
 
@@ -98,6 +99,10 @@ public final class CommandPresentationTests {
         Component live=new CommandOutput(plugin).progressUpdate();
         check(plain(live).startsWith("Migration status")&&!plain(live).contains("\n")&&colored(live,"1 / 2 chunks (50.0%)",NamedTextColor.AQUA),"Live notifications use one compact line with highlighted progress");
         check(plain(live).contains("snow: 50.0%")&&plain(live).contains("BlueMap: 3 regions pending"),"Live notifications retain shared coverage and compact map progress");
+        headroom.observe(90,3);messages.clear();command.onCommand(sender,null,"trueseasons",new String[]{"migration"});
+        check(plain(messages.getFirst()).endsWith("WAITING FOR TICK TIME"),"Recent tick pressure has an explicit command phase even at twenty historical TPS");
+        set(settings,"minTps",0.0);check(!engine.waitingForTickTime(),"Disabling the TPS guard also disables recent tick throttling");set(settings,"minTps",18.5);
+        headroom.observe(10,3);headroom.observe(10,3);check(!engine.waitingForTickTime(),"Healthy ticks resume without changing saved pause state");
         displayRegions[0]=-1;
         check(plain(new CommandOutput(plugin).progressUpdate()).contains("BlueMap: updates pending"),"Unknown region discovery never invents a physical region count");displayRegions[0]=3;
         check(command.onTabComplete(sender,null,"trueseasons",new String[]{"migration","no"}).equals(List.of("notify")),"Live notifications are discoverable in command completion");

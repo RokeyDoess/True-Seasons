@@ -446,7 +446,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             if(!base.equals(leafBase)||leafFilter!=autumnAllowed){
                 leafBase=base;leafFilter=autumnAllowed;
                 IntPredicate nativeFilter=autumnAllowed;
-                leafFiltered=new PaperLeafPackets.Context(base.seed(),base.minY(),base.maxY(),base.autumn(),id->nativeFilter.test(id)&&base.autumnBiomeAllowed().test(id),base.autumnCoverage(),base.springCoverage(),base.springFirst());
+                leafFiltered=new PaperLeafPackets.Context(base.seed(),base.minY(),base.maxY(),base.autumn(),id->nativeFilter.test(id)&&base.autumnBiomeAllowed().test(id),base.autumnCoverage(),base.springCoverage(),base.springFirst(),base.blossoms());
             }
             return leafFiltered;
         }

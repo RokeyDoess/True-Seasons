@@ -495,6 +495,10 @@ public final class AutumnLeafPacketTests {
             request.invoke(handler,new PaperLeafPackets.Context(42,0,16,false));channel.runPendingTasks();
             List<Object> restored=readAll(channel);apply(client,restored,0,0);
             check(client[index(9,6,8)]==birch&&client[index(3,6,3)]==cherry,"cleanup season request restores cached original leaf variants");
+            request.invoke(handler,new PaperLeafPackets.Context(42,0,16,false,0,256,true,new dev.trueseasons.visual.SpringBlossoms(100,100)));channel.runPendingTasks();apply(client,readAll(channel),0,0);
+            check(registry.appearance(client[index(9,6,8)])==AutumnTreeColors.Appearance.BLOSSOM,"Native biome filtering retains configured flowering tree and canopy coverage");
+            request.invoke(handler,new PaperLeafPackets.Context(42,0,16,false,0,256,true,new dev.trueseasons.visual.SpringBlossoms(100,0)));channel.runPendingTasks();apply(client,readAll(channel),0,0);
+            check(client[index(9,6,8)]==birch,"Native filtered reload restores ordinary leaves when canopy coverage is zero");
             request.invoke(handler,new PaperLeafPackets.Context(42,0,16,true));channel.runPendingTasks();apply(client,readAll(channel),0,0);
             check(client[index(9,6,8)]!=birch,"reenabling autumn restores appearances without full chunk load");
             Method retire=handler.getClass().getDeclaredMethod("retire");retire.setAccessible(true);retire.invoke(handler);

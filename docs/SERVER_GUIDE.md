@@ -24,7 +24,7 @@ The season's colors arrive during its first seven real days. Grass and biome fol
 
 Change `transition.opening-days` in `visuals.yml` to adjust the window, or use `0` for immediate colors. A window longer than the season is limited to that season's length. `/ts season set` applies the final colors immediately; `/ts season sync` returns to the current calendar stage. Downtime skips directly to the current stage.
 
-`/ts migration pause` freezes the saved season, color stage and snow coverage, including across restarts. Resume keeps a manual target or resynchronizes calendar mode to the current date. Resume before changing seasons. `/ts status` shows color progress while an opening transition is active.
+`/ts migration pause` freezes the saved season, color stage and snow coverage, including across restarts. BlueMap keeps its seasonal colors, with new seasonal renders held until resume. Resume keeps a manual target or resynchronizes calendar mode to the current date. Resume before changing seasons. `/ts status` shows color progress while an opening transition is active.
 
 BlueMap shows the full seasonal colors and receives no extra renders for the intermediate shades. Players receive the fixed shades when they connect, adding some initial join data. The server shares prepared palettes across joins while keeping outgoing client data independent. Disabling the opening window omits its unused shades from joining clients. Existing terrain and leaves are never rewritten for color transitions.
 

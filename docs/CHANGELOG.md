@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.5
+
+- Reduce repeated disk flushes while saving migration progress.
+- Avoid extra first-use setup when snow previews catch up near a player.
+- Protect recovered map updates before migration resumes after a crash.
+- Restore seasonal BlueMap colors after a paused restart without advancing the migration.
 
 ## 0.3.4
 

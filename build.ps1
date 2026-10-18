@@ -49,13 +49,13 @@ if ($LASTEXITCODE -ne 0) { throw 'Autumn leaf packet tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Snow presentation packet tests failed' }
 & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.SeasonalPresentationPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Combined seasonal presentation packet tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.4.jar'
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.5.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
 if ($Install) {
     foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'TrueSeasons-*.jar') {
-        if ($taskOldJar.Name -ne 'TrueSeasons-0.3.4.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
+        if ($taskOldJar.Name -ne 'TrueSeasons-0.3.5.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
     }
-    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.3.4.jar') -Force
+    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.3.5.jar') -Force
 }
 Write-Output "Built and verified: $taskJar"

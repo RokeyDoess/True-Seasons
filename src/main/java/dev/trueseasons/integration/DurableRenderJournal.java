@@ -41,7 +41,15 @@ public final class DurableRenderJournal implements AutoCloseable {
             }
         }
         channel = FileChannel.open(journal, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-        channel.truncate(validBytes); channel.position(validBytes);
+        try {
+            channel.truncate(validBytes); channel.position(validBytes);
+            // After a process-only crash, readable tail records may still be in the OS cache.
+            // Stabilize records newer than the forced snapshot before trusting recovered intent.
+            if (sequence > snapshotSequence) channel.force(false);
+        } catch (IOException failure) {
+            try { channel.close(); } catch (IOException closing) { failure.addSuppressed(closing); }
+            throw failure;
+        }
     }
     public synchronized boolean hasSnapshot() { return Files.exists(snapshot); }
     public synchronized Map<String, byte[]> state() {

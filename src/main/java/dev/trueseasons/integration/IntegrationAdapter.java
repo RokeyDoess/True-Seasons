@@ -24,6 +24,8 @@ public interface IntegrationAdapter extends AutoCloseable {
     /** A matching marker read from a saved snapshot/loaded complete chunk needs no world replay. */
     default boolean requiresRecovery(UUID world, int x, int z, String marker) { return requiresRecovery(world, x, z); }
     void tick();
+    /** Maintain saved intent and existing appearances without advancing seasonal work. */
+    default void maintain() {}
     int pending();
     /** Distinct world regions across terrain and map color work; -1 while discovering. */
     default int pendingRegions(){return pending();}

@@ -109,7 +109,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
                     if (System.currentTimeMillis() - lastCalendar > 60_000) { refreshSeason(true); lastCalendar = System.currentTimeMillis(); }
                     if (System.currentTimeMillis() - lastVisualWorlds >= 1000) { if(updateVisualState())persist(); lastVisualWorlds = System.currentTimeMillis(); }
                     stage="terrain migration";engine.tick();
-                    stage="BlueMap update";if(!state.paused)integrations.tick();
+                    stage="BlueMap update";if(state.paused)integrations.maintain();else integrations.tick();
                     stage="seasonal weather";weather.tick();
                     stage="snow replenishment";replenishment.tick();
                 } catch (Exception failure) { pauseAfterFailure(stage,failure); }

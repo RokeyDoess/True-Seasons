@@ -4,7 +4,9 @@ import java.util.*;
 
 public final class PreviewSchedulingTests {
     private static int checks;
-    public static void main(String[] args){
+    private record ReferencePosition(UUID world,int x,int z){}
+    public static void main(String[] args)throws Exception{
+        positionKeys();
         UUID first=new UUID(0,1),second=new UUID(0,2);
         var queue=new PreviewPriorityQueue<Integer>(128);
         for(int i=0;i<100;i++)check(queue.offer(first,i),"First viewer can queue a join burst");
@@ -29,4 +31,18 @@ public final class PreviewSchedulingTests {
         System.out.println("Preview scheduling tests passed: "+checks+" assertions");
     }
     private static void check(boolean ok,String label){checks++;if(!ok)throw new AssertionError(label);}
+    private static void positionKeys()throws Exception{
+        var constructor=Class.forName("dev.trueseasons.snow.LocalWinterSnowService$Position").getDeclaredConstructor(UUID.class,int.class,int.class);
+        constructor.setAccessible(true);var random=new Random(6271);
+        for(int i=0;i<4096;i++){
+            UUID world=i%11==0?null:new UUID(random.nextLong(),random.nextLong());
+            int x=i==0?Integer.MIN_VALUE:random.nextInt(),z=i==1?Integer.MAX_VALUE:random.nextInt();
+            Object key=constructor.newInstance(world,x,z),equal=constructor.newInstance(world==null?null:new UUID(world.getMostSignificantBits(),world.getLeastSignificantBits()),x,z);
+            check(key.hashCode()==new ReferencePosition(world,x,z).hashCode(),"Preview key hashes retain their previous coordinate distribution");
+            check(key.equals(equal)&&equal.equals(key)&&!key.equals(null)&&!key.equals(new ReferencePosition(world,x,z)),"Preview keys keep value equality within their own record type");
+            check(!key.equals(constructor.newInstance(world,x^1,z))&&!key.equals(constructor.newInstance(world,x,z^1))&&!key.equals(constructor.newInstance(new UUID(7,11),x,z)),"Other worlds and coordinates cannot share preview work");
+            var shared=new PreviewPriorityQueue<Object>(2);UUID viewer=new UUID(0,1);
+            check(shared.offer(viewer,key)&&!shared.offer(new UUID(0,2),equal)&&shared.size()==1&&shared.poll().equals(equal)&&shared.isEmpty(),"Equivalent keys from different viewers share one queue entry and release it once");
+        }
+    }
 }

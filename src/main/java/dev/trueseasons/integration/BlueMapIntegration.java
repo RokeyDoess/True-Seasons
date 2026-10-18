@@ -41,6 +41,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
     private String colorFailure;
     private SeasonalVisualState lastVisualState;
     private long lastColorRefresh;
+    private boolean colorTargetsStale;
     private final Set<ChunkKey> checkpointDirty = new LinkedHashSet<>(), durabilityRequired = new LinkedHashSet<>();
     private final ExecutorService persistence = Executors.newSingleThreadExecutor(r -> {
         Thread thread = new Thread(r, "TrueSeasons-render-journal"); thread.setDaemon(true); return thread;
@@ -176,6 +177,12 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         } else if (!ledger.entries().containsKey(key)) chunk.getPersistentDataContainer().remove(revisionKey);
     }
     @Override public void tick() {
+        tick(false);
+    }
+    @Override public void maintain() {
+        tick(true);
+    }
+    private void tick(boolean maintenanceOnly) {
         if (closed) return;
         long now = System.currentTimeMillis();
         if (!durabilityRequired.isEmpty()) persist(new ArrayList<>(durabilityRequired), true);
@@ -184,7 +191,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         if (instance.isPresent() && (mappedApi != instance.get() || now - lastWorldRefresh >= 1000)) {
             lastWorldRefresh = now; mappedWorlds.clear();
             BlueMapAPI api = instance.get();
-            if (mappedApi != api) detachColors();
+            if (mappedApi != api) { detachColors(); colorTargetsStale = true; }
             mappedApi = api;
             Set<UUID> ids = new LinkedHashSet<>(); Bukkit.getWorlds().forEach(world -> ids.add(world.getUID()));
             ledger.entries().keySet().forEach(key -> ids.add(key.world()));
@@ -194,14 +201,22 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
             }
             knownVisualMaps.clear(); visualMapsConfirmed = true;
             mappedWorlds.forEach((id, world) -> world.getMaps().forEach(map -> knownVisualMaps.put(map.getId(), id)));
-            mappedWorlds.forEach((id, world) -> ledger.entries().keySet().stream().filter(k -> k.world().equals(id)).forEach(k -> {
-                Path folder = world.getSaveFolder().toAbsolutePath().normalize(); if (!folder.equals(folders.put(k, folder))) checkpointDirty.add(k);
-            }));
+            Map<UUID, Path> worldFolders = new HashMap<>();
+            mappedWorlds.forEach((id, world) -> worldFolders.put(id, world.getSaveFolder().toAbsolutePath().normalize()));
+            for (ChunkKey key : ledger.entries().keySet()) {
+                Path folder = worldFolders.get(key.world());
+                if (folder != null && !folder.equals(folders.put(key, folder))) checkpointDirty.add(key);
+            }
         }
         if (instance.isEmpty()) { mappedWorlds.clear(); mappedApi = null; detachColors(); }
         SeasonalVisualState colorState = settings.get().blueMap ? visualSource.get() : null;
-        if (instance.isPresent() && (!Objects.equals(colorState, lastVisualState) || now - lastColorRefresh >= 1000)) {
-            lastVisualState = colorState; lastColorRefresh = now; refreshColors(colorState);
+        if (instance.isPresent() && ((!maintenanceOnly && colorTargetsStale) || !Objects.equals(colorState, lastVisualState) || now - lastColorRefresh >= 1000)) {
+            lastVisualState = colorState; lastColorRefresh = now; refreshColors(colorState, !maintenanceOnly);
+            colorTargetsStale = maintenanceOnly;
+        }
+        if (maintenanceOnly) {
+            brief = detail = "paused; render requests retained" + (colorFailure == null ? "" : "; seasonal colours unavailable: " + colorFailure);
+            return;
         }
         Map<UUID, BlueMapWorld> worlds = mappedWorlds;
         Set<ChunkKey> newlySaved = new LinkedHashSet<>();
@@ -574,7 +589,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         return ledger.requiresMarkerRecovery(key, marker, entry != null && entry.token().equals(readable.get(key)), deleted.contains(key), restored.contains(key));
     }
     @Override public void setVisuals(Supplier<SeasonalVisualState> visuals) { visualSource = Objects.requireNonNull(visuals); }
-    private void refreshColors(SeasonalVisualState state) {
+    private void refreshColors(SeasonalVisualState state, boolean updateTargets) {
         Set<String> retained = new HashSet<>();
         for (var world : mappedWorlds.entrySet()) for (BlueMapMap map : world.getValue().getMaps()) {
             retained.add(map.getId());
@@ -599,6 +614,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
                     BlueMapSeasonalColors old = colors.remove(map.getId()); if (old != null) old.close(); colorMaps.remove(map.getId());
                 }
                 unavailableColors.remove(map.getId()); unsupportedColorMaps.remove(map.getId());
+                if (!updateTargets) continue;
                 String fingerprint = state == null ? "vanilla" : state.fingerprint(world.getKey());
                 Object nativeWorld = nativeMap.getClass().getMethod("getWorld").invoke(nativeMap);
                 var listRegions = nativeWorld.getClass().getMethod("listRegions");
@@ -610,7 +626,7 @@ public final class BlueMapIntegration implements IntegrationAdapter, Listener {
         for (String id : new ArrayList<>(colors.keySet())) if (!retained.contains(id)) { colors.remove(id).close(); colorMaps.remove(id); }
         unavailableColors.retainAll(retained); unsupportedColorMaps.keySet().retainAll(retained);
         if (unavailableColors.isEmpty()) colorFailure = null;
-        try { visualQueue.compact(); } catch (RuntimeException failure) { colorFailure = failure.getMessage(); }
+        if (updateTargets) try { visualQueue.compact(); } catch (RuntimeException failure) { colorFailure = failure.getMessage(); }
     }
     private void detachColors() {
         colors.values().forEach(BlueMapSeasonalColors::close); colors.clear(); colorMaps.clear(); unsupportedColorMaps.clear(); unavailableColors.clear();

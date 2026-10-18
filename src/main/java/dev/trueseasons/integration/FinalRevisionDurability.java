@@ -5,6 +5,8 @@ import java.util.*;
 
 /** A forced dirty intent permits recoverable final records to share the next durability barrier. */
 final class FinalRevisionDurability {
+    // Give the next chunk's pre-edit barrier one intervening tick to cover these records.
+    private static final int FINAL_DELAY_TICKS = 2;
     private final Set<ChunkKey> dirty = new HashSet<>();
     private final Map<ChunkKey, Integer> appendedFinals = new LinkedHashMap<>();
     void restored(RenderLedger ledger) {
@@ -21,6 +23,6 @@ final class FinalRevisionDurability {
         }
     }
     List<ChunkKey> due(int tick, int limit) {
-        return appendedFinals.entrySet().stream().filter(row -> row.getValue() != tick).limit(limit).map(Map.Entry::getKey).toList();
+        return appendedFinals.entrySet().stream().filter(row -> tick - row.getValue() >= FINAL_DELAY_TICKS).limit(limit).map(Map.Entry::getKey).toList();
     }
 }

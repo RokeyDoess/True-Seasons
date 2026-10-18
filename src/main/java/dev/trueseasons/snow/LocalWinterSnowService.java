@@ -18,7 +18,11 @@ public final class LocalWinterSnowService implements Listener, AutoCloseable {
     @FunctionalInterface public interface PreviewSink {
         void publish(UUID world,int x,int z,SnowOwnershipSnapshots.Preview preview);
     }
-    private record Position(UUID world,int x,int z) {}
+    private record Position(UUID world,int x,int z) {
+        // Keep cold record-method linking out of the preview work budget.
+        @Override public int hashCode(){return (31*Objects.hashCode(world)+x)*31+z;}
+        @Override public boolean equals(Object other){return other instanceof Position p&&x==p.x&&z==p.z&&Objects.equals(world,p.world);}
+    }
     private static final int CHUNKS_PER_PLAYER=4096, MAX_SERVER_CHUNKS=65_536, INSPECTIONS_PER_TICK=64;
     private static final long BUDGET_NANOS=1_000_000, REFRESH_NANOS=5_000_000_000L;
     private static final int[] ALL_COLUMNS=new int[256];

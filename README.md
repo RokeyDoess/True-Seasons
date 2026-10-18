@@ -1,6 +1,6 @@
 # True Seasons
 
-[![Latest prerelease: v0.3.4](https://img.shields.io/badge/prerelease-v0.3.4-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.4)
+[![Latest prerelease: v0.3.5](https://img.shields.io/badge/prerelease-v0.3.5-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.5)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -11,7 +11,7 @@ True Seasons brings seasons to the world you've already built, using Minecraft's
 
 **No resource pack. No client mod.** Players join with ordinary Minecraft.
 
-**Latest prerelease: [0.3.4](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.4).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
+**Latest prerelease: [0.3.5](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.5).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 
 ## Seasons that feel like Minecraft
 

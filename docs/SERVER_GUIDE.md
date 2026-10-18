@@ -90,6 +90,8 @@ Use `/ts migration notify` for a single progress line every five seconds, sent o
 
 Saved-world discovery runs in the background and reuses each region file while checking its chunks. Chunk tracking also spreads nearby coordinates efficiently across its lookup tables. These improvements reduce indexing work; they do not eliminate the cost of changing terrain or rendering BlueMap.
 
+`migration.rescan-seconds` in `config.yml` sets the wait between completed background checks. A slow check finishes before that wait begins, giving terrain updates and BlueMap time to catch up.
+
 Each generated file explains its options.
 
 Terrain migration controls are in `config.yml`: `migration.max-chunks-per-tick`, `migration.max-millis-per-tick` and `migration.max-concurrent-chunks` limit application work and outstanding loads. `migration.pause-below-tps` defaults to 18.5. Snow preview limits are separate in `snow.yml`, and BlueMap's render limits are in `integrations.yml`. Lower limits reduce the work admitted at once but extend the transition. Time budgets are scheduling targets; an individual operation can take longer.
@@ -126,6 +128,8 @@ Disable `snowmelt.enabled` in `snow.yml` to show physical restoration directly. 
 
 `ground-cover.enabled` controls temporary plant removal. Disabling it restores saved plants during the next terrain update. Plants return only where their original space and support remain suitable. Breaking winter snow, changing its support or placing a replacement can discard the saved plant at that spot. Unresolved conflicts are reported as deferred work and need attention before cleanup can finish.
 
+If a saved chunk cannot be read, `/ts migration details` shows one affected chunk's coordinates and the read failure reason.
+
 Player-broken snow has a **60-second** refill delay by default. Change `replenishment.player-break-cooldown-seconds`; `0` disables the delay. Preview snow uses the same delay, including when the region pass arrives. It can be cleared but drops no items. Afterward, real snow may return during winter rain in loaded, completed terrain when light and support allow it. Existing layers do not grow taller.
 
 The introductory storm lasts until terrain updates and players' pending snow reveals finish, including migration pauses and restarts. Previous weather returns afterward. Throughout winter, rain and thunderstorms appear as snowfall in eligible biomes; clear weather stays clear.
@@ -145,6 +149,8 @@ The count combines distinct world regions across terrain and color work. A regio
 Season or palette changes also queue color updates for existing map regions. These use the same render limits and wait for terrain changes to finish and save. Unchanged restarts and reloads do not repeat the color pass. BlueMap uses the same autumn tree choices and retains the original world data.
 
 Edit `visuals.yml` to choose colors, then run `/ts reload`. Some plugin stacks may ask players to reconnect to load changed palettes.
+
+Foliage catch-up shares a server-wide allowance between players. In `visuals.yml`, `foliage-updates.max-chunks-per-tick` and `max-states-per-tick` limit these extra refreshes. Dense chunks continue over later ticks. Lower the limits if needed on a busy server; catching up will take longer. These limits leave normal chunk delivery and BlueMap rendering unchanged.
 
 ## Permissions
 

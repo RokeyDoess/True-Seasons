@@ -72,6 +72,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
                 snow,this::snowCoverageColumns,()->melting()&&!state.meltOrderVersion.isEmpty()?state.meltOrderVersion:version,
                 this::winterEnabled,()->settings.snowPlayerBreakCooldownSeconds,this::melting);
             presentation.snowUpdateLimits(settings.snowPresentation);
+            presentation.leafUpdateLimits(settings.leafPresentation);
             presentation.colorFrameSource(()->visualState.colors());
             Bukkit.getPluginManager().registerEvents(weather, this);
             replenishment = new SnowReplenishmentService(this,snow,this::settings,this::version,
@@ -224,6 +225,7 @@ public final class TrueSeasonsPlugin extends JavaPlugin implements TrueSeasonsAp
         if(!next.snowmelt){state.meltVersion="";state.meltOrderVersion="";state.meltColumns=0;state.meltStartColumns=0;}
         settings = next; visuals = nextVisuals;
         presentation.snowUpdateLimits(next.snowPresentation);
+        presentation.leafUpdateLimits(next.leafPresentation);
         updateVisualState();
         if(areasChanged)engine.invalidatePlayerAreas();
         if(snowRulesChanged)state.revision++;

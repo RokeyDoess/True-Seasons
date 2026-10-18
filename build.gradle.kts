@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.3.0"
+version = "0.3.1"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")

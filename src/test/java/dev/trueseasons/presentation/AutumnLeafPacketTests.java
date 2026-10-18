@@ -27,7 +27,7 @@ public final class AutumnLeafPacketTests {
         nativeIds=type("net.minecraft.world.level.block.Block").getField("BLOCK_STATE_REGISTRY").get(null);
         air=defaultId("AIR");stone=defaultId("STONE");birch=defaultId("BIRCH_LEAVES");
         birchLog=defaultId("BIRCH_LOG");spruce=defaultId("SPRUCE_LEAVES");cherry=defaultId("CHERRY_LEAVES");oakLog=defaultId("OAK_LOG");
-        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump(); stagedTree(); springTree();
+        nativeVariants(); paletteShapes(); viewerLifecycle(); crossChunk(); distantLoadDependency(); loadRepairPriority(); cornerLoadOrders(); decorativeAndBiomes(); batches(); verticalAndMetadata(); compositeHandler(); requestedContextBeforePump(); stagedTree(); springTree(); boundedRefresh();
         System.out.println("Autumn leaf packet tests passed: "+assertions+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -114,6 +114,37 @@ public final class AutumnLeafPacketTests {
         view.forget(0,0);check(view.retainedStates()==0,"unload releases original tree cache");
         check(view.refresh(10).isEmpty(),"forgotten chunk never refreshed");
         view.clear();check(!view.pending()&&view.retainedStates()==0,"clear releases queues and originals");
+    }
+    private static void boundedRefresh()throws Exception{
+        int[] source=filled(cherry),client=source.clone();int red=registry.painted(cherry,AutumnTreeColors.Appearance.RED);
+        var ordinary=new PaperLeafPackets.Context(42,0,16,false);var autumn=new PaperLeafPackets.Context(42,0,16,true);
+        var view=bridge.view();view.context(ordinary);view.chunk(chunk(chunkData(sectionWire(source,0)),0,0));view.context(autumn);
+        check(view.refresh(1,0).isEmpty()&&view.pending(),"Zero state allowance preserves all deferred foliage");
+        apply(client,view.refresh(1,37),0,0);
+        check(view.lastRefreshChunks()==1&&view.lastRefreshStates()==37,"Dense foliage consumes exactly its inspected-state allowance");
+        check(Arrays.stream(client).filter(value->value==red).count()==37,"A dense chunk publishes only the allowed partial changes");
+        int total=37,frames=0;
+        while(view.pending()){
+            int limit=new int[]{1,7,127}[frames++%3];
+            apply(client,view.refresh(3,limit),0,0);total+=view.lastRefreshStates();
+            check(view.lastRefreshChunks()<=3&&view.lastRefreshStates()<=limit&&frames<1000,"Partial foliage obeys both visit and state limits while converging");
+        }
+        check(total==4096&&Arrays.stream(client).allMatch(value->value==red),"Dense foliage is inspected once and reaches its exact endpoint");
+        view.context(ordinary);apply(client,view.refresh(1,53),0,0);view.context(autumn);
+        while(view.pending())apply(client,view.refresh(2,97),0,0);
+        check(Arrays.stream(client).allMatch(value->value==red),"Changing the season during a partial restore cancels the previous cursor");
+        view.context(ordinary);apply(client,view.refresh(1,41),0,0);
+        int replaced=0;view.update(single(0,0,0,stone));client[replaced]=stone;
+        while(view.pending())apply(client,view.refresh(1,127),0,0);
+        for(int local=0;local<4096;local++)check(client[local]==(local==replaced?stone:cherry),"An edit during partial repaint remains authoritative through restoration");
+        view.context(autumn);apply(client,view.refresh(1,17),0,0);view.forget(0,0);
+        check(!view.pending()&&view.refresh(10,1000).isEmpty()&&view.retainedStates()==0,"Unload cancels partial foliage and releases retained states");
+        view.chunk(chunk(chunkData(sectionWire(source,0)),0,0));view.context(ordinary);view.refresh(1,5);
+        view.chunk(chunk(chunkData(sectionWire(filled(air),0)),0,0));
+        check(view.refresh(10,1000).isEmpty()&&!view.pending()&&view.retainedStates()==0,"A replacement full chunk cancels its old partial cursor");
+        view.chunk(chunk(chunkData(sectionWire(source,0)),0,0));view.context(autumn);view.refresh(1,3);view.context(null);
+        int restored=0;while(view.pending()){List<Object> updates=view.refresh(2,61);for(Object update:updates)restored+=((short[])field(update,"positions")).length;}
+        check(restored==3&&view.retainedStates()==0,"Disabling presentation restores only shown changes and clears a partial cursor");
     }
     private static void crossChunk() throws Exception {
         int[] west=filled(air),east=filled(air);

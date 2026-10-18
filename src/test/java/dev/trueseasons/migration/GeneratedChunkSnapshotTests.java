@@ -79,7 +79,10 @@ public final class GeneratedChunkSnapshotTests {
             status("full", true, text(versionKey,version), text(pendingKey,version), integer(cursorKey,64)),
             status("minecraft:full", false, integer("trueseasons:bluemap_revision",123)),
             status("minecraft:full", false, new Tag(7,"trueseasons:ground_cover_v1",new byte[]{1,0,0})),
-            status("minecraft:full", false, integer("trueseasons:ground_cover_v1",123))
+            status("minecraft:full", false, integer("trueseasons:ground_cover_v1",123)),
+            status("minecraft:full", false, integer("trueseasons:winter_order",1)),
+            status("minecraft:full", false, text("trueseasons:winter_order","malformed")),
+            status("full", true, text(versionKey,version),integer("trueseasons:winter_order",1))
         };
         try (RandomAccessFile file = new RandomAccessFile(region.toFile(),"rw")) {
             file.setLength((fixtures.length + 2L) * 4096);
@@ -91,6 +94,12 @@ public final class GeneratedChunkSnapshotTests {
         var states = snapshot.states();
         check(!states.get(new ChunkPos(14,0)).matches(version,true), "Saved plant backups prevent cleanup completion without loading/restoration");
         check(!states.get(new ChunkPos(15,0)).matches(version,true), "Malformed plant backup presence remains visible to cleanup recovery");
+        check(states.get(new ChunkPos(16,0)).seasonMetadata()&&!states.get(new ChunkPos(16,0)).matches(version,true),
+                "An orphan winter order marker must be cleaned before plugin removal is safe");
+        check(states.get(new ChunkPos(17,0)).seasonMetadata()&&!states.get(new ChunkPos(17,0)).matches(version,true),
+                "Malformed orphan winter order metadata remains visible for safe live validation");
+        check(states.get(new ChunkPos(18,0)).matches(version,false)&&!states.get(new ChunkPos(18,0)).matches(version,true),
+                "A leftover order marker does not restart a completed season but still requires cleanup");
         check(states.size() == fixtures.length && snapshot.unreadable().isEmpty(), "Every readable FULL fixture supplies a saved metadata checkpoint");
         SavedChunkState modern = states.get(new ChunkPos(0,0));
         check(modern.full() && version.equals(modern.version()) && !modern.pending() && modern.matches(version,false),
@@ -189,6 +198,103 @@ public final class GeneratedChunkSnapshotTests {
         check(result.generated().isEmpty()&&result.unreadable().get(new ChunkPos(0,0)).contains("exceeds"),
             "Buffered parsing still enforces the total decompressed limit after a valid FULL tag");
     }
+    private static void ignoredUtf()throws Exception{
+        var method=SavedChunkStatus.class.getDeclaredMethod("skipUtf",DataInputStream.class,byte[].class);method.setAccessible(true);
+        List<byte[]> fixtures=new ArrayList<>();
+        for(String value:List.of("","ASCII", "\u0000é中\uD83D\uDE03","a".repeat(20000)+"中")){
+            var bytes=new ByteArrayOutputStream();new DataOutputStream(bytes).writeUTF(value);fixtures.add(bytes.toByteArray());
+        }
+        var random=new Random(8276231728L);
+        for(int sample=0;sample<6000;sample++){
+            int length=sample<256?1:random.nextInt(16);byte[] text=new byte[length];random.nextBytes(text);if(sample<256)text[0]=(byte)sample;
+            var bytes=new ByteArrayOutputStream();var data=new DataOutputStream(bytes);data.writeShort(length+(sample%7==0?1:0));data.write(text);fixtures.add(bytes.toByteArray());
+        }
+        for(byte[] bytes:fixtures){
+            boolean expected;
+            try(var input=new DataInputStream(new ByteArrayInputStream(bytes))){input.readUTF();expected=true;}catch(IOException invalid){expected=false;}
+            for(int size:new int[]{5,8192}){
+                boolean actual;
+                try(var input=new DataInputStream(new ByteArrayInputStream(bytes))){method.invoke(null,input,new byte[size]);actual=true;check(input.available()==0,"Ignored UTF consumes the exact encoded payload");}
+                catch(java.lang.reflect.InvocationTargetException invalid){if(!(invalid.getCause() instanceof IOException))throw invalid;actual=false;}
+                check(actual==expected,"Ignored UTF validates exactly like DataInputStream, including malformed/truncated data");
+            }
+        }
+    }
+    private static byte[] ignoredPayload(int child,int count,boolean truncated,boolean malformedKey)throws IOException{
+        var bytes=new ByteArrayOutputStream();var data=new DataOutputStream(bytes);data.writeByte(10);data.writeUTF("");tag(data,text("Status","minecraft:full"));
+        data.writeByte(10);data.writeUTF("ignored");
+        if(malformedKey){data.writeByte(8);data.writeShort(1);data.writeByte(0x80);data.writeUTF("value");}
+        else{data.writeByte(9);data.writeUTF("values");data.writeByte(child);data.writeInt(count);int width=child==1?1:child==2?2:child==3||child==5?4:8;data.write(new byte[count*width-(truncated?1:0)]);}
+        if(!truncated){data.writeByte(0);data.writeByte(0);}return bytes.toByteArray();
+    }
+    private static void ignoredPayloads(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("ignored-payloads"));int slot=0;
+        try(var file=new RandomAccessFile(directory.resolve("r.0.0.mca").toFile(),"rw")){
+            file.setLength(20*4096L);
+            for(int child=1;child<=6;child++){
+                chunk(file,slot,slot+2,ignoredPayload(child,1000,false,false),2);slot++;
+                chunk(file,slot,slot+2,ignoredPayload(child,1000,true,false),2);slot++;
+            }
+            chunk(file,slot,slot+2,ignoredPayload(1,1,false,true),2);slot++;
+            chunk(file,slot,slot+2,status("minecraft:full",false,new Tag(8,"ignored-text","a".repeat(20000)+"\u0000é中")),2);
+        }
+        var snapshot=new GeneratedChunkIndex().scanSnapshot(directory);
+        check(snapshot.generated().size()==7,"All primitive-list types and long ignored UTF remain readable");
+        check(snapshot.unreadable().size()==7,"Truncated primitive lists and malformed nested names remain unreadable despite a valid FULL tag");
+    }
+    private static void reusedEncodedBuffers(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("reused-encoded")),region=directory.resolve("r.0.0.mca");
+        byte[] large=new byte[24000];new Random(81273).nextBytes(large);
+        byte[][] values={status("full",false,text("trueseasons:season_version","first"),new Tag(7,"ignored",Arrays.copyOf(large,12000))),
+            status("full",false,text("trueseasons:season_version","second")),status("features",true),status("full",false),
+            status("full",false,text("trueseasons:season_version","third"),new Tag(7,"ignored",large)),
+            status("full",false),status("full",false,text("trueseasons:season_version","external"))};
+        values[3]=Arrays.copyOf(values[3],values[3].length-1); // Truncation must not consume bytes left by a previous large read.
+        int[] formats={3,2,1,3,2,3,2},locations=new int[values.length];
+        try(var file=new RandomAccessFile(region.toFile(),"rw")){
+            file.setLength(32*4096L);int sector=2;
+            for(int slot=0;slot<values.length;slot++){
+                byte[] encoded=payload(values[slot],formats[slot]);boolean external=slot==6;
+                int sectors=external?1:(encoded.length+5+4095)/4096;locations[slot]=(sector<<8)|sectors;
+                file.seek(slot*4L);file.writeInt(locations[slot]);file.seek(sector*4096L);
+                file.writeInt(external?1:encoded.length+1);file.writeByte(formats[slot]|(external?128:0));
+                if(external)Files.write(directory.resolve("c.6.0.mcc"),encoded);else file.write(encoded);
+                sector+=sectors;
+            }
+        }
+        byte[] before=Files.readAllBytes(region);var buffers=new SavedChunkStatus.ReadBuffers();
+        try(var file=new RandomAccessFile(region.toFile(),"r")){
+            var first=SavedChunkStatus.read(file,directory,new ChunkPos(0,0),locations[0],buffers);
+            for(int round=0;round<3;round++)for(int slot=0;slot<values.length;slot++){
+                if(slot==3){try{SavedChunkStatus.read(file,directory,new ChunkPos(slot,0),locations[slot],buffers);throw new AssertionError("Truncated raw data must not read stale buffer bytes");}
+                    catch(IOException expected){check(true,"A shorter truncated record remains unreadable after a large valid record");}}
+                else check(SavedChunkStatus.read(file,directory,new ChunkPos(slot,0),locations[slot],buffers).equals(SavedChunkStatus.read(directory,new ChunkPos(slot,0))),
+                    "Reused buffers match independent reads across sizes, compression formats and external records");
+            }
+            check("first".equals(first.version()),"Later buffer reuse leaves previously decoded checkpoints intact");
+        }
+        var snapshot=new GeneratedChunkIndex().scanSnapshot(directory);
+        check(snapshot.generated().size()==5&&snapshot.unfinished().size()==1&&snapshot.unreadable().size()==1,"Full snapshot preserves mixed reused-buffer classifications");
+        check(Arrays.equals(before,Files.readAllBytes(region)),"Reusing encoded buffers never changes saved data");
+    }
+    private static void malformedMetadataContainer(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("malformed-pdc-container")),region=directory.resolve("r.0.0.mca");
+        try(var file=new RandomAccessFile(region.toFile(),"rw")){
+            file.setLength(4*4096L);
+            for(int slot=0;slot<2;slot++){
+                var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);out.writeByte(10);out.writeUTF("");
+                if(slot==1){out.writeByte(10);out.writeUTF("Level");}
+                tag(out,text("Status","full"));tag(out,slot==0?text("ChunkBukkitValues","damaged"):
+                    new Tag(7,"ChunkBukkitValues",new byte[]{1,2,3}));out.writeByte(0);if(slot==1)out.writeByte(0);
+                chunk(file,slot,slot+2,bytes.toByteArray(),2);
+            }
+        }
+        byte[] before=Files.readAllBytes(region);var snapshot=new GeneratedChunkIndex().scanSnapshot(directory);
+        check(snapshot.generated().isEmpty()&&snapshot.states().isEmpty(),"Malformed reserved metadata containers cannot hydrate a completed season or safe cleanup");
+        check(snapshot.unreadable().size()==2,"Modern and legacy malformed metadata containers remain explicit unreadable chunks");
+        check(snapshot.unreadable().values().stream().allMatch(reason->reason.contains("ChunkBukkitValues")),"Unreadable metadata containers retain their diagnostic");
+        check(Arrays.equals(before,Files.readAllBytes(region)),"Malformed metadata is left untouched for safe recovery");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("trueseasons-status-regression-");
         try {
@@ -227,6 +333,7 @@ public final class GeneratedChunkSnapshotTests {
             checkpoints(directory);
             sharedRegion(directory);
             decompressionLimit(directory);
+            ignoredUtf();ignoredPayloads(directory);reusedEncodedBuffers(directory);malformedMetadataContainer(directory);
         } finally {
             try (var paths = Files.walk(directory)) {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);

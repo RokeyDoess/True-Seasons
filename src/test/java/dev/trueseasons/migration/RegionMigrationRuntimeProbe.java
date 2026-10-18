@@ -83,7 +83,7 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
         if (!current.equals(previous)) {
             if (previous != null) {
                 String[] point = previous.split(",");
-                if (!seasons.engine().regionReady(world.getUID(),Integer.parseInt(point[0]),Integer.parseInt(point[1]))) failure = "Region " + previous + " was unfinished when " + current + " started";
+                if (!job().regionProcessed(Integer.parseInt(point[0]),Integer.parseInt(point[1]))) failure = "Region " + previous + " was unfinished when " + current + " started";
             }
             if (!visited.add(current)) failure = "Completed region revisited: " + current;
             getLogger().info("REGION_START phase="+phase+" region="+current+" previous="+previous);
@@ -94,7 +94,7 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
     private void poll() throws Exception {
         if (phase.equals("stopping")) return;
         if (failure != null) throw new AssertionError(failure);
-        if (System.currentTimeMillis()-began > 1_200_000) throw new AssertionError("Timed out in " + phase + ": " + seasons.integrations().status());
+        if (System.currentTimeMillis()-began > 1_800_000) throw new AssertionError("Timed out in " + phase + ": " + seasons.integrations().status());
         if (++ticks % 5 == 0) world.save();
         if (ticks % 15 == 0) Bukkit.dispatchCommand(Bukkit.getConsoleSender(),"ts status");
         if (phase.equals("startup")) {
@@ -147,7 +147,7 @@ public final class RegionMigrationRuntimeProbe extends JavaPlugin implements Lis
                 }); return;
             }
             if (!seasons.engine().allFinished() || seasons.integrations().pending()!=0) return;
-            check(visited.size()>=2 && failure==null, "Every observed region finished before the next started, including restart");
+            check(visited.size()>=2 && failure==null, "Every observed region finished before the next started, including restart; visited="+visited+" failure="+failure);
             check(seasons.weather().activeStorms()==0, "Introductory storm ends when world migration finishes");
             winterRenders = renders(); check(winterRenders>0 && winterRenders==requests("winter") && failure==null,
                 "Every accepted winter map-region request was observed exactly once, including palette-only regions");

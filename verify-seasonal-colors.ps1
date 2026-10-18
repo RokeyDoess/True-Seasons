@@ -1,7 +1,7 @@
 param([string]$JdkDirectory='C:\Program Files\Java\jdk-25.0.4.1')
 $ErrorActionPreference='Stop'
 $taskSource=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'run/region-verification-0.1.7')).Path
-$taskRun=[System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run/seasonal-colors-verification-0.3.0'))
+$taskRun=[System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run/seasonal-colors-verification-0.3.1'))
 $taskRunRoot=[System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'run'))+[System.IO.Path]::DirectorySeparatorChar
 if(-not $taskRun.StartsWith($taskRunRoot,[StringComparison]::OrdinalIgnoreCase)-or(Test-Path -LiteralPath $taskRun)){throw 'Preserve existing controlled colour verification'}
 if(Get-NetTCPConnection -LocalPort 25588 -State Listen -ErrorAction SilentlyContinue){throw 'Colour verification port is in use'}
@@ -11,7 +11,7 @@ foreach($taskName in @('paper.jar','eula.txt','bukkit.yml','spigot.yml')){Copy-I
 Copy-Item -LiteralPath (Join-Path $taskSource 'plugins/BlueMap') -Destination (Join-Path $taskRun 'plugins') -Recurse
 Copy-Item -LiteralPath (Join-Path $taskSource 'plugins/TrueSeasons') -Destination (Join-Path $taskRun 'plugins') -Recurse
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/plugins/bluemap-5.29-paper.jar') -Destination (Join-Path $taskRun 'plugins')
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.0.jar') -Destination (Join-Path $taskRun 'plugins')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.1.jar') -Destination (Join-Path $taskRun 'plugins')
 # Use the current stopped server's launcher/version to check Paper 26.3 build 181 as well.
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/paper.jar') -Destination (Join-Path $taskRun 'paper.jar') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/versions/26.3/paper-26.3.jar') -Destination (Join-Path $taskRun 'versions/26.3/paper-26.3.jar') -Force

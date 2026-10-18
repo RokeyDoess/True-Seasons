@@ -11,6 +11,7 @@ import dev.trueseasons.visual.SeasonVisualResolver;
 import dev.trueseasons.visual.SeasonColorFrame;
 import org.bukkit.Bukkit;
 import io.papermc.paper.connection.PlayerCommonConnection;
+import io.papermc.paper.connection.PlayerConfigurationConnection;
 
 /** Isolated, fail-fast adapter for Mojang-mapped Paper 26.3. No server registry or chunk is mutated. */
 public final class PaperBiomePackets {
@@ -23,13 +24,15 @@ public final class PaperBiomePackets {
     }
     private final Class<?> registryPacket, packedEntry, compound, chunkPacket, chunkData, biomePacket, biomeData, forgetPacket;
     private final Constructor<?> registryConstructor, entryConstructor, chunkConstructor, chunkDataConstructor, biomeConstructor, biomeDataConstructor;
+    private final Method compoundCopy, startConfiguration;
+    private final Field packetListener;
     private final Field sectionBuffer, heightmaps, blockEntities, extraPackets;
     private final Map<String, Object> authoritative;
     private record SourceBiome(String key,Object tag){}
     private record Alias(Object id,Object tag){}
     private record RegistryTemplate(SeasonVisualResolver visuals,List<SourceBiome> source,List<Alias> aliases){}
     // One bounded, shared immutable template. Original packet entries are never cached/replaced.
-    private RegistryTemplate template;
+    private volatile RegistryTemplate template;
 
     public PaperBiomePackets() throws ReflectiveOperationException { this(null); }
     /** Dedicated packet tests supply authoritative encoded entries without starting a Minecraft server. */
@@ -37,6 +40,9 @@ public final class PaperBiomePackets {
         registryPacket = type("net.minecraft.network.protocol.configuration.ClientboundRegistryDataPacket");
         packedEntry = type("net.minecraft.core.RegistrySynchronization$PackedRegistryEntry");
         compound = type("net.minecraft.nbt.CompoundTag");
+        compoundCopy = compound.getMethod("copy");
+        packetListener = field(type("io.papermc.paper.connection.PaperCommonConnection"), "packetListener");
+        startConfiguration = type("net.minecraft.server.network.ServerConfigurationPacketListenerImpl").getMethod("startConfiguration");
         chunkPacket = type("net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket");
         chunkData = type("net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData");
         biomePacket = type("net.minecraft.network.protocol.game.ClientboundChunksBiomesPacket");
@@ -57,12 +63,11 @@ public final class PaperBiomePackets {
     public RegistryResult registry(Object packet) throws ReflectiveOperationException {
         return registry(packet, null);
     }
-    public synchronized RegistryResult registry(Object packet, SeasonVisualResolver visuals) throws ReflectiveOperationException {
+    public RegistryResult registry(Object packet, SeasonVisualResolver visuals) throws ReflectiveOperationException {
         if (!registryPacket.isInstance(packet)) return null;
         Object key = call(packet, "registry");
         if (!call(key, "identifier").toString().equals("minecraft:worldgen/biome")) return null;
         List<?> entries = (List<?>) call(packet, "entries");
-        List<Object> expanded = new ArrayList<>(entries);
         List<SourceBiome> source=new ArrayList<>();
         for(Object entry:entries){
             String name=call(entry,"id").toString();Object tag=((Optional<?>)call(entry,"data")).orElse(null);
@@ -70,11 +75,25 @@ public final class PaperBiomePackets {
             if(tag==null||!compound.isInstance(tag))throw new IllegalStateException("Cannot materialize biome "+name);
             source.add(new SourceBiome(name,tag));
         }
-        if(template!=null&&(template.visuals==visuals||template.visuals!=null&&visuals!=null&&template.visuals.registryFingerprint().equals(visuals.registryFingerprint()))&&template.source.equals(source)){
-            // Each connection gets independent NBT, including when other packet handlers edit it.
-            for(Alias alias:template.aliases)expanded.add(entryConstructor.newInstance(alias.id,Optional.of(call(alias.tag,"copy"))));
-            return new RegistryResult(registryConstructor.newInstance(key,List.copyOf(expanded)),entries.size(),source.stream().map(SourceBiome::key).toList(),expanded.size());
+        RegistryTemplate cached=template;
+        if(!matches(cached,visuals,source)){
+            // Coalesce cold builds, but let established joins copy their immutable template independently.
+            synchronized(this){
+                cached=template;
+                if(!matches(cached,visuals,source))return buildRegistry(key,entries,source,visuals);
+            }
         }
+        List<Object> expanded=new ArrayList<>(entries);
+        // Every connection owns its outgoing NBT, even when another handler edits the packet.
+        for(Alias alias:cached.aliases)expanded.add(entryConstructor.newInstance(alias.id,Optional.of(copyCompound(alias.tag))));
+        return new RegistryResult(registryConstructor.newInstance(key,List.copyOf(expanded)),entries.size(),source.stream().map(SourceBiome::key).toList(),expanded.size());
+    }
+    private static boolean matches(RegistryTemplate cached,SeasonVisualResolver visuals,List<SourceBiome> source){
+        return cached!=null&&(cached.visuals==visuals||cached.visuals!=null&&visuals!=null&&cached.visuals.registryFingerprint().equals(visuals.registryFingerprint()))&&cached.source.equals(source);
+    }
+    private Object copyCompound(Object tag)throws ReflectiveOperationException{return compoundCopy.invoke(tag);}
+    private RegistryResult buildRegistry(Object key,List<?> entries,List<SourceBiome> source,SeasonVisualResolver visuals)throws ReflectiveOperationException{
+        List<Object> expanded=new ArrayList<>(entries);
         Set<String> identifiers = new HashSet<>(); for (Object entry : entries) identifiers.add(call(entry, "id").toString());
         for (Object entry : entries) {
             Object id = call(entry, "id");
@@ -84,7 +103,7 @@ public final class PaperBiomePackets {
             Object tag = value.orElse(null);
             if (tag == null) tag = authoritative.get(id.toString());
             if (tag == null || !compound.isInstance(tag)) throw new IllegalStateException("Cannot materialize biome " + id);
-            Object cold = call(tag, "copy");
+            Object cold = copyCompound(tag);
             compound.getMethod("putFloat", String.class, float.class).invoke(cold, "temperature", -1.0f);
             compound.getMethod("putBoolean", String.class, boolean.class).invoke(cold, "has_precipitation", true);
             compound.getMethod("putString", String.class, String.class).invoke(cold, "temperature_modifier", "none");
@@ -102,9 +121,9 @@ public final class PaperBiomePackets {
                 Object tag = ((Optional<?>) call(entry, "data")).orElse(null);
                 if (tag == null) tag = authoritative.get(biome);
                 if (tag == null || !compound.isInstance(tag)) throw new IllegalStateException("Cannot materialize biome " + biome);
-                Object colored = call(tag, "copy");
+                Object colored = copyCompound(tag);
                 Object effects = compound.getMethod("getCompoundOrEmpty", String.class).invoke(colored, "effects");
-                effects = call(effects, "copy");
+                effects = copyCompound(effects);
                 var profile = visuals.resolve(season, biome);
                 compound.getMethod("putInt", String.class, int.class).invoke(effects, "grass_color", profile.grassRgb());
                 compound.getMethod("putInt", String.class, int.class).invoke(effects, "foliage_color", profile.foliageRgb());
@@ -129,9 +148,9 @@ public final class PaperBiomePackets {
         List<String> biomeKeys = new ArrayList<>(); for (Object entry : entries) biomeKeys.add(call(entry, "id").toString());
         if(entries.size()<=256){
             List<SourceBiome> originals=new ArrayList<>();
-            for(SourceBiome biome:source)originals.add(new SourceBiome(biome.key,call(biome.tag,"copy")));
+            for(SourceBiome biome:source)originals.add(new SourceBiome(biome.key,copyCompound(biome.tag)));
             List<Alias> aliases=new ArrayList<>();
-            for(Object alias:expanded.subList(entries.size(),expanded.size()))aliases.add(new Alias(call(alias,"id"),call(((Optional<?>)call(alias,"data")).orElseThrow(),"copy")));
+            for(Object alias:expanded.subList(entries.size(),expanded.size()))aliases.add(new Alias(call(alias,"id"),copyCompound(((Optional<?>)call(alias,"data")).orElseThrow())));
             template=new RegistryTemplate(visuals,List.copyOf(originals),List.copyOf(aliases));
         }else template=null;
         return new RegistryResult(registryConstructor.newInstance(key, List.copyOf(expanded)), entries.size(), List.copyOf(biomeKeys), expanded.size());
@@ -141,7 +160,7 @@ public final class PaperBiomePackets {
         if(identifiers.contains(name))throw new IllegalStateException("Reserved client biome alias already exists: "+name);
         Object tag=((Optional<?>)call(entry,"data")).orElse(null);if(tag==null)tag=authoritative.get(biome);
         if(tag==null||!compound.isInstance(tag))throw new IllegalStateException("Cannot materialize biome "+biome);
-        Object colored=call(tag,"copy"),effects=call(compound.getMethod("getCompoundOrEmpty",String.class).invoke(colored,"effects"),"copy");
+        Object colored=copyCompound(tag),effects=copyCompound(compound.getMethod("getCompoundOrEmpty",String.class).invoke(colored,"effects"));
         var profile=visuals.resolve(new SeasonColorFrame(visuals.previous(season),season,step*SeasonColorFrame.COMPLETE/SeasonColorFrame.PALETTE_STEPS),biome);
         for(String field:List.of("grass_color","foliage_color","dry_foliage_color"))compound.getMethod("putInt",String.class,int.class).invoke(effects,field,field.equals("grass_color")?profile.grassRgb():profile.foliageRgb());
         compound.getMethod("putString",String.class,String.class).invoke(effects,"grass_color_modifier","none");
@@ -205,9 +224,13 @@ public final class PaperBiomePackets {
         return biomeConstructor.newInstance(List.copyOf(data));
     }
     public Channel channel(PlayerCommonConnection api) throws ReflectiveOperationException {
-        Field listener = field(type("io.papermc.paper.connection.PaperCommonConnection"), "packetListener");
-        Object packets = listener.get(api), connection = packets.getClass().getField("connection").get(packets);
+        Object packets = packetListener.get(api), connection = packets.getClass().getField("connection").get(packets);
         return (Channel) connection.getClass().getField("channel").get(connection);
+    }
+
+    /** Paper reentry waits for its owning plugin; run the native registry handshake before returning to play. */
+    public void refreshConfiguration(PlayerConfigurationConnection api) throws ReflectiveOperationException {
+        startConfiguration.invoke(packetListener.get(api));
     }
 
     private Map<String, Object> packAuthoritativeBiomes() throws ReflectiveOperationException {

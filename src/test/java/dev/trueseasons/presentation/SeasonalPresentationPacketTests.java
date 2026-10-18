@@ -30,7 +30,7 @@ public final class SeasonalPresentationPacketTests {
         air=defaultId("AIR");stone=defaultId("STONE");snow=defaultId("SNOW");birch=defaultId("BIRCH_LEAVES");
         Object property=type("net.minecraft.world.level.block.state.properties.BlockStateProperties").getField("PERSISTENT").get(null);
         birch=id(registry.states[birch].getClass().getMethod("setValue",type("net.minecraft.world.level.block.state.properties.Property"),Comparable.class).invoke(registry.states[birch],property,true));
-        pipeline();respawnAndDisconnect();alreadyVisibleWinterEntry();stormRevealBarrier();previewDigging();sharedSnowBudget();snowmelt();meltDigging();
+        pipeline();respawnAndDisconnect();registryReload();alreadyVisibleWinterEntry();stormRevealBarrier();previewDigging();sharedSnowBudget();sharedLeafBudget();snowmelt();meltDigging();
         System.out.println("Seasonal presentation packet tests passed: "+checks+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -157,6 +157,40 @@ public final class SeasonalPresentationPacketTests {
             int[] client=source.clone();apply(client,reveal,0,0,0);check(client[index(0,5,0)]==snow,"Retained sent marker supports complete reveal without full chunk resend");
         }finally{channel.finishAndReleaseAll();}
     }
+    private static void registryReload()throws Exception{
+        var owner=owners();publish(owner,0,0,plane(2));
+        var leafContext=new PaperLeafPackets.Context(42,0,16,true);
+        var snowContext=new PaperSnowPackets.Context(VERSION,64,0,16,owner);
+        var palette=new java.util.concurrent.atomic.AtomicReference<>(resolver());
+        var handler=new NativeSnowPresentation.ClimateHandler(new PaperBiomePackets(Map.of()),Logger.getAnonymousLogger(),POLICY,palette::get,
+            leaves,()->Map.of("minecraft:overworld",leafContext),snowPackets,()->Map.of("minecraft:overworld",snowContext));
+        EmbeddedChannel channel=new EmbeddedChannel(handler);
+        try{
+            channel.writeOutbound(biomeRegistry());channel.readOutbound();handler.setPresentation(false,Season.AUTUMN,POLICY);
+            channel.writeOutbound(login("minecraft:overworld"));channel.readOutbound();
+            int[] source=planeSource(2);source[index(1,5,1)]=birch;
+            Object chunk=chunk(sectionWire(source,new int[64]),0,0);channel.writeOutbound(chunk);channel.readOutbound();
+            check(((PaperLeafPackets.View)field(handler,"leaves")).retainedStates()>0,"Before reload canopy originals are retained");
+            check(((PaperSnowPackets.View)field(handler,"snow")).retainedColumns()>0,"Before reload snow originals are retained");
+            Field requested=handler.getClass().getDeclaredField("reconfigurationRequested");requested.setAccessible(true);requested.setBoolean(handler,true);
+            Object start=type("net.minecraft.network.protocol.game.ClientboundStartConfigurationPacket").getField("INSTANCE").get(null);
+            channel.writeOutbound(start);check(channel.readOutbound()==start,"Native configuration start reaches client unchanged");
+            check((boolean)field(handler,"configuring")&&(boolean)field(handler,"reconfigurationStarted"),"Registry reload suspends play presentation");
+            check(((PaperLeafPackets.View)field(handler,"leaves")).retainedStates()==0&&((PaperSnowPackets.View)field(handler,"snow")).retainedColumns()==0,
+                "Registry reload clears both old visual caches");
+            check(((Map<?,?>)field(handler,"originals")).isEmpty()&&field(handler,"dimension")==null,"Registry reload discards old biome and dimension context");
+            YamlConfiguration config=new YamlConfiguration();for(Season season:Season.values())config.set("palettes.temperate."+season.key(),List.of("123456","654321"));
+            palette.set(new SeasonVisualResolver(config,POLICY));channel.writeOutbound(biomeRegistry());Object expanded=channel.readOutbound();
+            check(((List<?>)call(expanded,"entries")).size()==3*PaperBiomePackets.COLOR_BANKS,"Reload still supplies every seasonal alias bank");
+            check(field(handler,"deliveredVisuals")==palette.get()&&!(boolean)field(handler,"reconfigurationRequested"),"Fresh registry acknowledges the edited palette");
+            channel.writeOutbound(login("minecraft:overworld"));channel.readOutbound();
+            check(!(boolean)field(handler,"configuring"),"Fresh login resumes game presentation");
+            channel.writeOutbound(chunk);int[] client=decode(channel.readOutbound());
+            check(client[index(1,5,1)]!=birch,"First chunk after reload restores autumn canopy painting");
+            for(int c=0;c<256;c++)check(client[index(c&15,2,c>>4)]==(rank(c,0,0)<64?snow:air),"First chunk after reload restores current snow coverage");
+            check(channel.isActive(),"Registry reload preserves connection");
+        }finally{channel.finishAndReleaseAll();}
+    }
     private static NativeSnowPresentation.ClimateHandler handler(SeasonVisualResolver resolver,Map<String,PaperLeafPackets.Context> foliage,Map<String,PaperSnowPackets.Context> snow)throws ReflectiveOperationException{
         return new NativeSnowPresentation.ClimateHandler(new PaperBiomePackets(Map.of()),Logger.getAnonymousLogger(),POLICY,()->resolver,leaves,()->foliage,snowPackets,()->snow);
     }
@@ -251,6 +285,73 @@ public final class SeasonalPresentationPacketTests {
     }
     private static SeasonVisualResolver resolver(){YamlConfiguration config=new YamlConfiguration();for(Season season:Season.values())config.set("palettes.temperate."+season.key(),List.of("83B957","D98637"));return new SeasonVisualResolver(config,POLICY);}
     private static List<Object> pumpSnow(Object handler,EmbeddedChannel channel,PaperSnowPackets.Context next)throws Exception{invoke(handler,"requestSnow",PaperSnowPackets.Context.class,next);channel.runPendingTasks();return readAll(channel);}
+    private static void sharedLeafBudget()throws Exception{
+        var budget=new PresentationWorkBudget(2,100);
+        var ordinary=new PaperLeafPackets.Context(42,0,16,false);var autumn=new PaperLeafPackets.Context(42,0,16,true);
+        Map<String,PaperLeafPackets.Context> worlds=Map.of("minecraft:overworld",ordinary);
+        List<NativeSnowPresentation.ClimateHandler> handlers=new ArrayList<>();List<EmbeddedChannel> channels=new ArrayList<>();
+        int[][] clients=new int[5][];int[] firstServed=new int[5];Arrays.fill(firstServed,-1);
+        int[] source=new int[4096];Arrays.fill(source,air);for(int c=0;c<256;c++)source[index(c&15,5,c>>4)]=birch;
+        var visuals=resolver();
+        try{
+            for(int viewer=0;viewer<5;viewer++){
+                var handler=new NativeSnowPresentation.ClimateHandler(new PaperBiomePackets(Map.of()),Logger.getLogger("shared-leaf-tests"),POLICY,
+                    ()->visuals,leaves,()->worlds,null,Map::of,ignored->{},null,budget);
+                var channel=new EmbeddedChannel(handler);handlers.add(handler);channels.add(channel);
+                channel.writeOutbound(biomeRegistry());readAll(channel);channel.writeOutbound(login("minecraft:overworld"));readAll(channel);
+                channel.writeOutbound(chunk(sectionWire(source,new int[64]),0,0));clients[viewer]=decode(channel.readOutbound());
+            }
+            int start=0;
+            for(int frame=1;frame<=30;frame++){
+                budget.beginTick(frame);int following=start+1,admitted=0;
+                for(int offset=0;offset<5;offset++){
+                    int viewer=(start+offset)%5;
+                    if((boolean)invoke(handlers.get(viewer),"requestLeaves",PaperLeafPackets.Context.class,autumn)){
+                        admitted++;following=start+offset+1;if(firstServed[viewer]<0)firstServed[viewer]=frame;
+                    }
+                }
+                int changed=0;
+                for(int viewer=0;viewer<5;viewer++){
+                    channels.get(viewer).runPendingTasks();List<Object> updates=readAll(channels.get(viewer));changed+=updateCount(updates);apply(clients[viewer],updates,0,0,0);
+                }
+                check(admitted<=1&&changed<=100,"Foliage viewers share one inspection allowance, including queued tasks");start=following%5;
+                boolean complete=true;for(var handler:handlers)complete&=!(boolean)field(handler,"leafPending")&&autumn.equals(field(handler,"leafApplied"));
+                if(complete)break;
+            }
+            int orange=registry.painted(birch,dev.trueseasons.visual.AutumnTreeColors.Appearance.ORANGE);
+            for(int viewer=0;viewer<5;viewer++){
+                check(firstServed[viewer]>0&&firstServed[viewer]<=5,"Independent foliage rotation admits every viewer without starvation");
+                check(!(boolean)field(handlers.get(viewer),"leafPending"),"Shared foliage throttling eventually converges for every viewer");
+                for(int c=0;c<256;c++)check(clients[viewer][index(c&15,5,c>>4)]==orange,"All clients reach the same exact autumn endpoint");
+            }
+            var handler=handlers.getFirst();var channel=channels.getFirst();
+            var switchWhileWriting=new java.util.concurrent.atomic.AtomicBoolean(true);
+            channel.pipeline().addFirst("foliage-target-race",new io.netty.channel.ChannelOutboundHandlerAdapter(){
+                @Override public void write(io.netty.channel.ChannelHandlerContext context,Object packet,io.netty.channel.ChannelPromise promise)throws Exception{
+                    if(packet.getClass().getSimpleName().equals("ClientboundSectionBlocksUpdatePacket")&&switchWhileWriting.compareAndSet(true,false))
+                        invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,autumn);
+                    super.write(context,packet,promise);
+                }
+            });
+            budget.beginTick(90);invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,ordinary);channel.runPendingTasks();readAll(channel);
+            check(autumn.equals(field(handler,"leafWanted"))&&ordinary.equals(field(handler,"leafApplied")),"A newer foliage request survives arrival while an older pump is writing");
+            for(int frame=91;frame<99;frame++){
+                budget.beginTick(frame);invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,autumn);channel.runPendingTasks();readAll(channel);
+                if(!(boolean)field(handler,"leafPending"))break;
+            }
+            check(autumn.equals(field(handler,"leafApplied"))&&!(boolean)field(handler,"leafPending"),"A request arriving during packet writing converges on its newer target");
+            channel.pipeline().remove("foliage-target-race");
+            budget.beginTick(100);check((boolean)invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,ordinary),"Foliage restoration can reserve a new tick");
+            budget.beginTick(101);channel.runPendingTasks();check(readAll(channel).isEmpty(),"An expired foliage grant cannot send old work in a new tick");
+            check((boolean)invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,ordinary),"Expired foliage can retry without losing its requested target");
+            channel.runPendingTasks();check(updateCount(readAll(channel))==100,"Retried foliage still obeys the inspection allowance");
+            budget.limits(1,1);budget.beginTick(102);invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,ordinary);channel.runPendingTasks();
+            check(updateCount(readAll(channel))==1,"Reloaded minimum foliage limits constrain actual packet updates");
+            budget.beginTick(103);invoke(handler,"requestLeaves",PaperLeafPackets.Context.class,ordinary);
+            channel.writeOutbound(login("trueseasons:other"));readAll(channel);channel.runPendingTasks();
+            check(readAll(channel).isEmpty(),"A dimension switch drops deferred foliage from the previous world");
+        }finally{for(var channel:channels)channel.finishAndReleaseAll();}
+    }
     private static void sharedSnowBudget()throws Exception{
         var budget=new SnowPresentationBudget(2,100);var owner=owners();publish(owner,0,0,plane(2));
         var hidden=new PaperSnowPackets.Context(VERSION,0,0,16,owner);

@@ -17,7 +17,7 @@ migration:
   # Legacy setting retained for compatibility. Storms now follow visible chunks.
   player-radius-chunks: 4
   # Complete one saved region before moving to the next, independent of players.
-  # Read region headers again periodically to include externally generated chunks.
+  # Wait this many seconds after a background check before starting another.
   rescan-seconds: 300
   # Informational invariant: True Seasons never offers generation-enabled loads.
   generate-missing-chunks: false

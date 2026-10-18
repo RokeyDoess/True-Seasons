@@ -2,6 +2,11 @@
 # Autumn trees use vanilla colored poplar leaf appearances; spruce stays unchanged.
 # Saved biome IDs and leaf blocks remain untouched.
 enabled: true
+foliage-updates:
+  # Shared limits for extra foliage refreshes across all players each tick.
+  # Dense chunks continue next tick; ordinary chunk delivery is unaffected.
+  max-chunks-per-tick: 64
+  max-states-per-tick: 8192
 transition:
   # Real 24-hour days at the start of a calendar season; 0 changes immediately.
   # Manual season commands always use the final colors.

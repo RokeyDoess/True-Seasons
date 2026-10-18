@@ -1,5 +1,5 @@
 param([string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1', [switch]$SkipBuild, [switch]$Resume, [switch]$Reuse,
-    [ValidatePattern('^[a-zA-Z0-9._-]+$')][string]$RunName='region-verification-0.3.0')
+    [ValidatePattern('^[a-zA-Z0-9._-]+$')][string]$RunName='region-verification-0.3.1')
 $ErrorActionPreference = 'Stop'
 $taskSourceCandidate = Join-Path $PSScriptRoot 'run/verification'
 if (-not (Test-Path -LiteralPath $taskSourceCandidate)) { $taskSourceCandidate = Join-Path $PSScriptRoot '../test server' }
@@ -41,7 +41,7 @@ foreach ($taskJar in Get-ChildItem -LiteralPath $taskPlugins -Filter 'TrueSeason
     Rename-Item -LiteralPath $taskJar.FullName -NewName ($taskJar.Name + '.disabled.' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../test server/plugins/bluemap-5.29-paper.jar') -Destination $taskPlugins -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.0.jar') -Destination $taskPlugins
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'build/libs/TrueSeasons-0.3.1.jar') -Destination $taskPlugins
 $taskProbeBuild = Join-Path $PSScriptRoot 'build/region-probe'
 New-Item -ItemType Directory -Path $taskProbeBuild -Force | Out-Null
 [System.IO.File]::WriteAllText((Join-Path $taskProbeBuild 'plugin.yml'), @'
@@ -71,7 +71,7 @@ enforce-whitelist=true
 $taskSettings = Join-Path $taskPlugins 'TrueSeasons'
 Copy-Item -Path (Join-Path $PSScriptRoot 'src/main/resources/*.yml') -Destination $taskSettings -Force
 $taskConfig = Join-Path $taskSettings 'config.yml'
-$taskText = [System.IO.File]::ReadAllText($taskConfig).Replace('max-concurrent-chunks: 2','max-concurrent-chunks: 4').Replace('max-chunks-per-tick: 1','max-chunks-per-tick: 4').Replace('pause-below-tps: 18.5','pause-below-tps: 0.0')
+$taskText = [System.IO.File]::ReadAllText($taskConfig).Replace('max-concurrent-chunks: 2','max-concurrent-chunks: 4').Replace('max-chunks-per-tick: 1','max-chunks-per-tick: 4').Replace('pause-below-tps: 18.5','pause-below-tps: 0.0').Replace('rescan-seconds: 300','rescan-seconds: 30')
 [System.IO.File]::WriteAllText($taskConfig,$taskText)
 $taskIntegration = Join-Path $taskSettings 'integrations.yml'
 [System.IO.File]::WriteAllText($taskIntegration,[System.IO.File]::ReadAllText($taskIntegration).Replace('flush-seconds: 30','flush-seconds: 5'))
@@ -86,9 +86,9 @@ foreach ($taskCycle in $(if ($Resume) { @(3) } else { @(1,2) })) {
     $taskProcess = [System.Diagnostics.Process]::new(); $taskProcess.StartInfo = $taskStart; [void]$taskProcess.Start()
     [System.IO.File]::WriteAllText((Join-Path $taskRun 'server.pid'),[string]$taskProcess.Id)
     $taskOut = $taskProcess.StandardOutput.ReadToEndAsync(); $taskErr = $taskProcess.StandardError.ReadToEndAsync()
-    $taskDeadline = [DateTime]::UtcNow.AddMinutes(22)
+    $taskDeadline = [DateTime]::UtcNow.AddMinutes(32)
     while (-not $taskProcess.HasExited -and [DateTime]::UtcNow -lt $taskDeadline) { Start-Sleep -Milliseconds 500 }
-    if (-not $taskProcess.HasExited) { $taskProcess.StandardInput.WriteLine('stop'); if (-not $taskProcess.WaitForExit(30000)) { $taskProcess.Kill($true) }; throw 'Region verification timed out' }
+    if (-not $taskProcess.HasExited) { $taskProcess.StandardInput.WriteLine('stop'); if (-not $taskProcess.WaitForExit(60000)) { throw 'Region verification is still saving; preserve its process and inspect the clone' }; throw 'Region verification timed out after a normal stop' }
     $taskProcess.WaitForExit(); $taskLog = $taskOut.GetAwaiter().GetResult() + $taskErr.GetAwaiter().GetResult()
     [System.IO.File]::WriteAllText((Join-Path $taskRun "cycle-$taskCycle.log"),$taskLog)
     if ($taskLog.Contains('PROBE_REGION_FAILED') -or -not $taskLog.Contains($(if ($taskCycle -eq 1) { 'PROBE_REGION_RESTART_READY' } else { 'PROBE_REGION_ALL_PASSED' }))) { throw "Region verification failed in cycle $taskCycle; inspect clone logs" }

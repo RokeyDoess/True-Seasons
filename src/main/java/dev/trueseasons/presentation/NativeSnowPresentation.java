@@ -3,11 +3,13 @@ package dev.trueseasons.presentation;
 import dev.trueseasons.api.Season;
 import dev.trueseasons.climate.SeasonClimatePolicy;
 import dev.trueseasons.config.SnowPresentationLimits;
+import dev.trueseasons.config.LeafPresentationLimits;
 import dev.trueseasons.snow.SeasonalSnowService;
 import dev.trueseasons.snow.SnowOwnershipSnapshots;
 
 import io.netty.channel.*;
 import io.papermc.paper.event.connection.configuration.PlayerConnectionInitialConfigureEvent;
+import io.papermc.paper.event.connection.configuration.PlayerConnectionReconfigureEvent;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
@@ -47,8 +49,11 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private volatile Map<String, PaperSnowPackets.Context> snowWorlds = Map.of();
     private final Map<UUID, Viewer> viewers = new ConcurrentHashMap<>();
     private final SnowPresentationBudget snowBudget=new SnowPresentationBudget();
+    private final PresentationWorkBudget leafBudget=new PresentationWorkBudget(LeafPresentationLimits.DEFAULT.chunks(),LeafPresentationLimits.DEFAULT.states());
     public void snowUpdateLimits(SnowPresentationLimits limits){snowBudget.limits(limits);}
+    public void leafUpdateLimits(LeafPresentationLimits limits){leafBudget.limits(limits.chunks(),limits.states());}
     private int nextViewer;
+    private int nextLeafViewer;
     private final Predicate<World> snowMelting;
     private final Set<UUID> warned = new HashSet<>();
     private volatile boolean closed;
@@ -62,7 +67,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                     ||!Objects.equals(handler.snowWanted,handler.snowApplied))pending++;
             previews+=handler.snowPreviewColumns;hidden+=handler.snowHiddenColumns;
         }
-        var usage=snowBudget.usage();return new SnowDiagnostics(connected,pending,previews,hidden,usage.chunks(),usage.blocks());
+        var usage=snowBudget.usage();return new SnowDiagnostics(connected,pending,previews,hidden,usage.chunks(),usage.units());
     }
     private java.util.function.Consumer<PreviewBreak> previewBreak=ignored->{};
     public void onPreviewBreak(java.util.function.Consumer<PreviewBreak> listener){previewBreak=Objects.requireNonNull(listener);}
@@ -130,7 +135,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 return;
             }
             UUID id = event.getConnection().getProfile().getId();
-            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals, leafPackets, () -> leafWorlds,snowPackets,()->snowWorlds,notice->previewBroken(id,notice),snowBudget);
+            ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals, leafPackets, () -> leafWorlds,snowPackets,()->snowWorlds,notice->previewBroken(id,notice),snowBudget,leafBudget);
             channel.pipeline().addBefore("packet_handler", HANDLER, handler);
             viewers.put(id, new Viewer(channel, handler));
             if (closed) { viewers.remove(id); channel.eventLoop().execute(() -> handler.retire()); }
@@ -140,9 +145,34 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         }
     }
     @EventHandler(priority = EventPriority.MONITOR)
-    public void join(PlayerJoinEvent event) { snowBudget.beginTick(Bukkit.getCurrentTick());update(event.getPlayer()); }
+    public void join(PlayerJoinEvent event) { beginPresentationTick();update(event.getPlayer());updateLeaves(event.getPlayer()); }
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void reconfigure(PlayerConnectionReconfigureEvent event) {
+        Viewer viewer = viewers.get(event.getConnection().getProfile().getId());
+        // Other plugins can own configuration sessions. Only resume a refresh we requested.
+        if (closed || viewer == null || !viewer.channel.isActive()
+                || !viewer.handler.reconfigurationRequested || viewer.handler.reconfigurationResumed) return;
+        viewer.handler.reconfigurationResumed = true;
+        // The acknowledgment can arrive on Netty, but native setup fires synchronous Bukkit events.
+        if (event.isAsynchronous()) Bukkit.getScheduler().runTask(plugin, () -> refreshConfiguration(event, viewer));
+        else refreshConfiguration(event, viewer);
+    }
+    private void refreshConfiguration(PlayerConnectionReconfigureEvent event, Viewer viewer) {
+        if (!event.getConnection().isConnected()) return;
+        try {
+            packets.refreshConfiguration(event.getConnection());
+        } catch (ReflectiveOperationException | RuntimeException failure) {
+            viewer.handler.failedVisuals = visuals.get();
+            viewer.handler.reconfigurationRequested = false;
+            plugin.getLogger().log(Level.WARNING, "Changed seasonal colors could not refresh for "
+                + event.getConnection().getProfile().getName() + "; reconnect once to load them", failure);
+            // If native setup could not start, leave Paper's plugin-owned waiting phase.
+            // Paper also guards this call when a configuration task is already running.
+            event.getConnection().completeReconfiguration();
+        }
+    }
     @EventHandler(priority = EventPriority.MONITOR)
-    public void world(PlayerChangedWorldEvent event) { snowBudget.beginTick(Bukkit.getCurrentTick());update(event.getPlayer()); }
+    public void world(PlayerChangedWorldEvent event) { beginPresentationTick();update(event.getPlayer());updateLeaves(event.getPlayer()); }
     @EventHandler(priority = EventPriority.MONITOR)
     public void quit(PlayerQuitEvent event) {
         // Paper also fires quit while another plugin reconfigures a still-live connection.
@@ -152,13 +182,22 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
 
     public void tick() {
         if (closed) return;
-        snowBudget.beginTick(Bukkit.getCurrentTick());
+        beginPresentationTick();
         refreshLeafWorlds();
         viewers.entrySet().removeIf(entry -> !entry.getValue().channel.isActive());
         var players=new ArrayList<>(Bukkit.getOnlinePlayers());
         int start=players.isEmpty()?0:Math.floorMod(nextViewer,players.size()),following=start+1;
         for(int offset=0;offset<players.size();offset++)if(update(players.get((start+offset)%players.size())))following=start+offset+1;
         nextViewer=following; // Resume after the last admitted viewer rather than favoring the same few.
+        start=players.isEmpty()?0:Math.floorMod(nextLeafViewer,players.size());following=start+1;
+        for(int offset=0;offset<players.size();offset++)if(updateLeaves(players.get((start+offset)%players.size())))following=start+offset+1;
+        nextLeafViewer=following; // Foliage admission rotates independently from snow work.
+    }
+    private void beginPresentationTick(){int tick=Bukkit.getCurrentTick();snowBudget.beginTick(tick);leafBudget.beginTick(tick);}
+    private boolean updateLeaves(Player player){
+        if(!player.getConnection().isConnected())return false;
+        Viewer viewer=viewers.get(player.getUniqueId());
+        return viewer!=null&&viewer.handler.requestLeaves(leafContext(player.getWorld()));
     }
     private PaperLeafPackets.Context leafContext(World world) {
         SeasonVisualResolver resolver = visuals.get();
@@ -239,7 +278,6 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         if(desiredFrame!=null)desiredFrame=desiredFrame.palette();
         SeasonClimatePolicy policy = climate.get();
         SeasonVisualResolver nextVisuals = visuals.get();
-        viewer.handler.requestLeaves(leafContext(player.getWorld()));
         boolean scheduled=viewer.handler.requestSnow(snowWorlds.get(player.getWorld().getKey().asString()));
         // Biome effects are immutable after configuration. A palette edit uses
         // Paper's normal reconfiguration handshake rather than asking for reconnects.
@@ -256,6 +294,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             if (!nextVisuals.equals(viewer.handler.failedVisuals)) {
                 viewer.handler.reconfigurationRequested = true;
                 viewer.handler.reconfigurationStarted = false;
+                viewer.handler.reconfigurationResumed = false;
                 viewer.handler.reconfigurationRequestedAt = System.currentTimeMillis();
                 player.getConnection().reenterConfiguration();
                 return scheduled;
@@ -324,6 +363,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private final Supplier<Map<String,PaperSnowPackets.Context>> snowWorlds;
         private final java.util.function.Consumer<PreviewBreak> previewBreak;
         private final SnowPresentationBudget snowBudget;
+        private final PresentationWorkBudget leafBudget;
         private volatile PaperSnowPackets.Context snowWanted;
         private volatile boolean snowPending;
         private volatile PaperSnowPackets.Context snowApplied;
@@ -338,6 +378,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private PaperLeafPackets.Context leafBase,leafFiltered;
         private IntPredicate leafFilter;
         private volatile PaperLeafPackets.Context leafWanted;
+        private volatile PaperLeafPackets.Context leafApplied;
         private volatile boolean leafPending;
         private final java.util.concurrent.atomic.AtomicBoolean leafPumpQueued = new java.util.concurrent.atomic.AtomicBoolean();
         private ChannelHandlerContext context;
@@ -352,8 +393,9 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         private volatile SeasonVisualResolver deliveredVisuals;
         private volatile boolean reconfigurationRequested;
         private volatile boolean reconfigurationStarted;
+        private volatile boolean reconfigurationResumed;
         private long reconfigurationRequestedAt;
-        private SeasonVisualResolver failedVisuals;
+        private volatile SeasonVisualResolver failedVisuals;
         private final Supplier<SeasonVisualResolver> visuals;
         private Season colors;
         private SeasonColorFrame colorFrame;
@@ -385,12 +427,18 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy, Supplier<SeasonVisualResolver> visuals,
                 PaperLeafPackets leafPackets, Supplier<Map<String, PaperLeafPackets.Context>> leafWorlds,
                 PaperSnowPackets snowPackets,Supplier<Map<String,PaperSnowPackets.Context>> snowWorlds,java.util.function.Consumer<PreviewBreak> previewBreak,SnowPresentationBudget snowBudget) {
+            this(packets,logger,policy,visuals,leafPackets,leafWorlds,snowPackets,snowWorlds,previewBreak,snowBudget,null);
+        }
+        ClimateHandler(PaperBiomePackets packets, Logger logger, SeasonClimatePolicy policy, Supplier<SeasonVisualResolver> visuals,
+                PaperLeafPackets leafPackets, Supplier<Map<String, PaperLeafPackets.Context>> leafWorlds,
+                PaperSnowPackets snowPackets,Supplier<Map<String,PaperSnowPackets.Context>> snowWorlds,java.util.function.Consumer<PreviewBreak> previewBreak,SnowPresentationBudget snowBudget,PresentationWorkBudget leafBudget) {
             this.packets = packets; this.logger = logger; this.policy = Objects.requireNonNull(policy);
             this.visuals = Objects.requireNonNull(visuals);
             this.leaves = leafPackets == null ? null : leafPackets.view(); this.leafWorlds = leafWorlds;
             this.snow=snowPackets==null?null:snowPackets.view();this.snowWorlds=snowWorlds;
             this.previewBreak=previewBreak;
             this.snowBudget=snowBudget;
+            this.leafBudget=leafBudget;
         }
         private PaperLeafPackets.Context filtered(PaperLeafPackets.Context base){
             if(base==null)return null;
@@ -432,7 +480,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                     for(long key:snowFresh)if(snowFresh.remove(key))snow.prioritize((int)key,(int)(key>>32));
                     for(long key:snowDirty)if(snowDirty.remove(key))snow.dirty((int)key,(int)(key>>32));
                     int blocks=applied!=null&&applied.previews()?1024:128;
-                    List<Object> updates=snow.refresh(grant==null?8:grant.chunks,grant==null?blocks:Math.min(blocks,grant.blocks));
+                    List<Object> updates=snow.refresh(grant==null?8:grant.chunks,grant==null?blocks:Math.min(blocks,grant.units));
                     for(Object update:updates)context.write(update);
                     if(!updates.isEmpty())context.flush();
                     publishSnow();snowApplied=applied;
@@ -442,19 +490,26 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             });}catch(RuntimeException failure){if(grant!=null)grant.close();snowPumpQueued.set(false);throw failure;}
             return true;
         }
-        private void requestLeaves(PaperLeafPackets.Context next) {
-            if (leaves == null || context == null || !context.channel().isActive() || retired) return;
-            boolean changed = !Objects.equals(leafWanted, next); leafWanted = next;
-            if (!changed && !leafPending || !leafPumpQueued.compareAndSet(false,true)) return;
-            context.executor().execute(() -> {
+        private boolean requestLeaves(PaperLeafPackets.Context next) {
+            if (leaves == null || context == null || !context.channel().isActive() || retired) return false;
+            boolean changed = !Objects.equals(leafApplied, next); leafWanted = next;
+            if (!changed && !leafPending || !leafPumpQueued.compareAndSet(false,true)) return false;
+            PresentationWorkBudget.Grant grant=leafBudget==null?null:leafBudget.reserve(8,1024);
+            if(leafBudget!=null&&grant==null){leafPumpQueued.set(false);return false;}
+            try{context.executor().execute(() -> {
                 try {
                     if (retired || !context.channel().isActive()) return;
-                    leaves.context(filtered(leafWanted));
-                    for (Object update : leaves.refresh(1)) context.write(update);
-                    context.flush(); leafPending = leaves.pending();
+                    if(grant!=null&&!grant.begin())return;
+                    PaperLeafPackets.Context applied=leafWanted;
+                    leaves.context(filtered(applied));
+                    List<Object> updates=grant==null?leaves.refresh(1):leaves.refresh(grant.chunks,grant.units);
+                    for (Object update : updates) context.write(update);
+                    if(!updates.isEmpty())context.flush();leafPending = leaves.pending();leafApplied=applied;
+                    if(grant!=null)grant.complete(leaves.lastRefreshChunks(),leaves.lastRefreshStates());
                 } catch (ReflectiveOperationException | RuntimeException failure) { fail(failure); }
-                finally { leafPumpQueued.set(false); }
-            });
+                finally { if(grant!=null)grant.close();leafPumpQueued.set(false); }
+            });}catch(RuntimeException failure){if(grant!=null)grant.close();leafPumpQueued.set(false);throw failure;}
+            return true;
         }
         private void rebuildClimate() {
             allowed = new boolean[biomeKeys.size()];
@@ -556,14 +611,14 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
                 return registry.packet();
             }
             String simple = message.getClass().getSimpleName();
-            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; reconfigurationStarted = true; originals.clear(); if(leaves!=null)leaves.clear();if(snow!=null){snow.clear();snowDirty.clear();snowFresh.clear();snowPending=false;snowHidden=false;snowPreviewed=false;snowHiddenColumns=0;snowPreviewColumns=0;snowApplied=null;dimension=null;} }
+            if (simple.equals("ClientboundStartConfigurationPacket")) { configuring = true; reconfigurationStarted = true; originals.clear(); if(leaves!=null){leaves.clear();leafApplied=null;}if(snow!=null){snow.clear();snowDirty.clear();snowFresh.clear();snowPending=false;snowHidden=false;snowPreviewed=false;snowHiddenColumns=0;snowPreviewColumns=0;snowApplied=null;dimension=null;} }
             if (simple.equals("ClientboundLoginPacket")) configuring = false;
             if (simple.equals("ClientboundLoginPacket") || simple.equals("ClientboundRespawnPacket")) {
                 originals.clear();
                 if(leaves!=null||snow!=null){
                     Object spawn = PaperBiomePackets.call(message,"commonPlayerSpawnInfo");
                     dimension = PaperBiomePackets.call(PaperBiomePackets.call(spawn,"dimension"),"identifier").toString();
-                    if(leaves!=null){leaves.clear();leafWanted = leafWorlds.get().get(dimension); leaves.context(filtered(leafWanted)); leafPending = false;}
+                    if(leaves!=null){leaves.clear();leafApplied=null;leafWanted = leafWorlds.get().get(dimension); leaves.context(filtered(leafWanted)); leafPending = false;}
                     if(snow!=null){snow.clear();snowDirty.clear();snowFresh.clear();snowWanted=snowWorlds.get().get(dimension);snow.context(snowWanted);snowPending=false;snowHidden=false;snowPreviewed=false;snowHiddenColumns=0;snowPreviewColumns=0;snowApplied=snowWanted;}
                 }
             }
@@ -600,7 +655,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             if(snow!=null&&!retired){snow.context(snowWanted);painted=snow.update(painted);publishSnow();}
             return painted;
         }
-        @Override public void channelInactive(ChannelHandlerContext context) throws Exception { originals.clear(); if(leaves!=null)leaves.clear();if(snow!=null){snow.clear();snowDirty.clear();snowFresh.clear();snowPending=false;snowHidden=false;snowPreviewed=false;snowHiddenColumns=0;snowPreviewColumns=0;snowApplied=null;dimension=null;}super.channelInactive(context); }
+        @Override public void channelInactive(ChannelHandlerContext context) throws Exception { originals.clear(); if(leaves!=null){leaves.clear();leafApplied=null;}if(snow!=null){snow.clear();snowDirty.clear();snowFresh.clear();snowPending=false;snowHidden=false;snowPreviewed=false;snowHiddenColumns=0;snowPreviewColumns=0;snowApplied=null;dimension=null;}super.channelInactive(context); }
         private void fail(Throwable failure) {
             logger.log(Level.SEVERE, "Native snowfall packet compatibility failed; closing affected connection to avoid invalid biome data", failure);
             if (context != null) context.close();

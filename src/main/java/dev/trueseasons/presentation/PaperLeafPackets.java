@@ -60,6 +60,9 @@ public final class PaperLeafPackets {
         private AutumnTreeColors.Session session;
         private boolean clearAfterRestore;
         private int storedStates;
+        private Chunk refreshing;
+        private IntIterator refreshStates;
+        private int lastRefreshChunks,lastRefreshStates;
         public void context(Context next){
             if(next==null){
                 if(context==null||clearAfterRestore)return;
@@ -70,14 +73,19 @@ public final class PaperLeafPackets {
             }
             clearAfterRestore=false;
             if(Objects.equals(context,next))return;
+            cancelRefresh();
             if(context!=null&&(context.seed!=next.seed||context.minY!=next.minY||context.maxY!=next.maxY))clear();
             // A color-stage change does not change any original tree samples or anchors.
             context=next;chunks.keySet().forEach(this::queue);
         }
-        public void clear(){chunks.clear();pending.clear();repairs.clear();waiting.clear();broadWaiters.clear();storedStates=0;session=null;clearAfterRestore=false;}
+        public void clear(){refreshing=null;refreshStates=null;chunks.clear();pending.clear();repairs.clear();waiting.clear();broadWaiters.clear();storedStates=0;session=null;clearAfterRestore=false;}
         private void invalidate(){session=null;}
-        private void queue(long key){if(chunks.containsKey(key)&&!repairs.contains(key))pending.add(key);}
-        private void repair(long key){if(chunks.containsKey(key)){pending.remove(key);repairs.add(key);}}
+        private void cancelRefresh(){
+            if(refreshing!=null){pending.add(PaperBiomePackets.key(refreshing.x,refreshing.z));refreshing=null;refreshStates=null;}
+        }
+        private void cancelRefresh(long key){if(refreshing!=null&&PaperBiomePackets.key(refreshing.x,refreshing.z)==key)cancelRefresh();}
+        private void queue(long key){if(chunks.containsKey(key)&&!repairs.contains(key)){cancelRefresh(key);pending.add(key);}}
+        private void repair(long key){if(chunks.containsKey(key)){cancelRefresh(key);pending.remove(key);repairs.add(key);}}
         private void missing(long key){
             if(resolving==null)return;
             if(resolving.missing.contains(key))return;
@@ -155,6 +163,7 @@ public final class PaperLeafPackets {
                 int[] states=sections.get(section).states();if(states==null)continue;
                 for(int i=0;i<4096;i++)if(registry.relevant(states[i]))source.original.put((section<<12)|i,states[i]);
             }
+            cancelRefresh(key);
             Chunk previous=chunks.remove(key);if(previous!=null){storedStates-=previous.original.size();clearMissing(previous);}
             if(storedStates+source.original.size()>MAX_TREE_STATES){invalidate();nearby(x,z);return packet;}
             chunks.put(key,source);storedStates+=source.original.size();invalidate();arrived(key);
@@ -215,17 +224,29 @@ public final class PaperLeafPackets {
             if(old<0||!registry.kind(old).leaves()||registry.kind(old).species()!=registry.kind(state).species())chunk.shown.remove(key);
             invalidate();nearby(chunk.x,chunk.z);return chunk;
         }
-        public void forget(int x,int z){long key=PaperBiomePackets.key(x,z);Chunk old=chunks.remove(key);pending.remove(key);repairs.remove(key);if(old!=null){storedStates-=old.original.size();clearMissing(old);invalidate();nearby(x,z);}}
-        /** One chunk per ordinary tick; shutdown can explicitly drain remaining restorations. */
+        public void forget(int x,int z){long key=PaperBiomePackets.key(x,z);cancelRefresh(key);Chunk old=chunks.remove(key);pending.remove(key);repairs.remove(key);if(old!=null){storedStates-=old.original.size();clearMissing(old);invalidate();nearby(x,z);}}
+        /** Explicit unlimited-state drains remain available for shutdown and compatibility. */
         public List<Object> refresh(int budget) throws ReflectiveOperationException {
+            return refresh(budget,Integer.MAX_VALUE);
+        }
+        /** Both visits and inspected original states are bounded, including unchanged blocks. */
+        public List<Object> refresh(int budget,int stateBudget) throws ReflectiveOperationException {
+            if(budget<0||stateBudget<0)throw new IllegalArgumentException("Nonnegative foliage budget required");
+            lastRefreshChunks=0;lastRefreshStates=0;
             List<Object> result=new ArrayList<>();
-            for(int count=0;count<budget&&pending();count++){
-                Set<Long> next=repairs.isEmpty()?pending:repairs;Iterator<Long> iterator=next.iterator();long key=iterator.next();iterator.remove();
-                Chunk chunk=chunks.get(key);if(chunk==null)continue;
-                clearMissing(chunk);
+            while(lastRefreshChunks<budget&&lastRefreshStates<stateBudget&&pending()){
+                if(refreshing==null){
+                    Set<Long> next=repairs.isEmpty()?pending:repairs;Iterator<Long> iterator=next.iterator();long key=iterator.next();iterator.remove();
+                    refreshing=chunks.get(key);if(refreshing==null)continue;
+                    clearMissing(refreshing);
+                    // Shown states are always a subset of originals; edits invalidate this cursor.
+                    refreshStates=refreshing.original.keySet().iterator();
+                }
+                Chunk chunk=refreshing;lastRefreshChunks++;
                 Map<Integer,Short2ObjectOpenHashMap<Object>> updates=new LinkedHashMap<>();
-                IntSet inspect=new IntOpenHashSet(chunk.original.keySet());inspect.addAll(chunk.shown.keySet());
-                for(int local:inspect){int original=chunk.original.get(local);if(original<0)continue;
+                while(lastRefreshStates<stateBudget&&refreshStates.hasNext()){
+                    int local=refreshStates.nextInt();lastRefreshStates++;
+                    int original=chunk.original.get(local);if(original<0)continue;
                     int painted=appearance(chunk,local,original),previous=chunk.shown.getOrDefault(local,original);
                     if(previous==painted)continue;
                     int y=chunk.minY+(local>>8),section=y>>4;
@@ -233,11 +254,14 @@ public final class PaperLeafPackets {
                     updates.computeIfAbsent(section,k->new Short2ObjectOpenHashMap<>()).put(at,registry.states[painted]);shown(chunk,local,original,painted);
                 }
                 for(var row:updates.entrySet())result.add(sectionConstructor.newInstance(sectionOf.invoke(null,chunk.x,row.getKey(),chunk.z),row.getValue()));
+                if(!refreshStates.hasNext()){refreshing=null;refreshStates=null;}
             }
             if(!pending()&&clearAfterRestore){clear();context=null;}
             return result;
         }
-        public boolean pending(){return !pending.isEmpty()||!repairs.isEmpty();}
+        public int lastRefreshChunks(){return lastRefreshChunks;}
+        public int lastRefreshStates(){return lastRefreshStates;}
+        public boolean pending(){return refreshing!=null||!pending.isEmpty()||!repairs.isEmpty();}
         public int retainedStates(){return storedStates;}
     }
     public View view(){return new View();}

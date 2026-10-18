@@ -8,6 +8,7 @@ import dev.trueseasons.visual.SeasonVisualResolver;
 import org.bukkit.configuration.file.YamlConfiguration;
 import java.lang.reflect.*;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.logging.Logger;
 
 /** Exercises actual 26.3 NMS packet records, packet codec, and vanilla biome climate decoder. */
@@ -16,7 +17,7 @@ public final class NativeSnowPacketTests {
     public static void main(String[] args) throws Exception {
         Class.forName("net.minecraft.SharedConstants").getMethod("tryDetectVersion").invoke(null);
         Class.forName("net.minecraft.server.Bootstrap").getMethod("bootStrap").invoke(null);
-        registryAndClimate(); palettesAndRefresh(); climateExclusions(); seasonalColors(); registryCaching();
+        registryAndClimate(); palettesAndRefresh(); climateExclusions(); seasonalColors(); registryCaching(); concurrentRegistryCaching();
         System.out.println("Native snow packet tests passed: " + assertions + " assertions");
         Class.forName("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
     }
@@ -237,6 +238,54 @@ public final class NativeSnowPacketTests {
         check(!immediate.equals(resolver),"Changing the available alias banks requires registry reconfiguration");
         config.set("enabled",false);
         check(bridge.registry(packet,new SeasonVisualResolver(config)).registrySize()==2,"Disabling seasonal colors retains only the original and cold climate banks");
+    }
+    private static void concurrentRegistryCaching()throws Exception{
+        var firstConfig=new YamlConfiguration();var otherConfig=new YamlConfiguration();var disabledConfig=new YamlConfiguration();
+        for(Season season:Season.values()){
+            firstConfig.set("palettes.temperate."+season.key(),List.of("83B957","D98637"));
+            otherConfig.set("palettes.temperate."+season.key(),List.of("123456","654321"));
+            disabledConfig.set("palettes.temperate."+season.key(),List.of("83B957","D98637"));
+        }
+        disabledConfig.set("enabled",false);
+        var resolvers=List.of(new SeasonVisualResolver(firstConfig),new SeasonVisualResolver(otherConfig),new SeasonVisualResolver(disabledConfig));
+        Object source=biome(.7f,true),original=call(source,"copy");
+        var pool=Executors.newFixedThreadPool(8);
+        try{
+            for(boolean invalidate:new boolean[]{false,true}){
+                var bridge=new PaperBiomePackets(Map.of("minecraft:forest",source));
+                var start=new CountDownLatch(1);List<Future<List<Object>>> futures=new ArrayList<>();
+                for(int worker=0;worker<8;worker++){
+                    int offset=worker;
+                    futures.add(pool.submit(()->{
+                        start.await();List<Object> owned=new ArrayList<>();
+                        for(int round=0;round<12;round++){
+                            int palette=invalidate?(offset+round)%resolvers.size():0;
+                            boolean knownPack=round%2==0;
+                            Object packet=registry(List.of(entry("minecraft:forest",knownPack?Optional.empty():Optional.of(source))));
+                            var result=bridge.registry(packet,resolvers.get(palette));
+                            if(result.registrySize()!=(palette==2?2:PaperBiomePackets.COLOR_BANKS))throw new AssertionError("Concurrent join used another configuration's registry");
+                            List<?> entries=(List<?>)call(round==0?wireRoundTrip(result.packet()):result.packet(),"entries");
+                            if(((Optional<?>)call(entries.getFirst(),"data")).isEmpty()!=knownPack)throw new AssertionError("Concurrent join changed the original known-pack encoding");
+                            for(Object alias:((List<?>)call(result.packet(),"entries")).subList(1,result.registrySize()))owned.add(((Optional<?>)call(alias,"data")).orElseThrow());
+                            Object cold=((Optional<?>)call(entries.get(1),"data")).orElseThrow();
+                            if((float)call(decodeBiome(cold),"getBaseTemperature")!=-1f)throw new AssertionError("Concurrent join inherited another connection's NBT edit");
+                            cold.getClass().getMethod("putFloat",String.class,float.class).invoke(cold,"temperature",1f);
+                            if(palette!=2){
+                                Object colored=((Optional<?>)call(entries.get(2),"data")).orElseThrow();Object decoded=decodeBiome(colored);
+                                int grass=(int)decoded.getClass().getMethod("getGrassColor",double.class,double.class).invoke(decoded,0d,0d);
+                                if(grass!=(palette==0?0x83B957:0x123456))throw new AssertionError("Concurrent join inherited another configuration's colors");
+                                Object effects=colored.getClass().getMethod("getCompoundOrEmpty",String.class).invoke(colored,"effects");
+                                effects.getClass().getMethod("putInt",String.class,int.class).invoke(effects,"grass_color",0);
+                            }
+                        }
+                        return owned;
+                    }));
+                }
+                start.countDown();Set<Object> aliases=Collections.newSetFromMap(new IdentityHashMap<>());
+                for(var future:futures)for(Object tag:future.get(60,TimeUnit.SECONDS))check(aliases.add(tag),"Concurrent connections own independent alias NBT");
+                check(source.equals(original),"Concurrent cache hits and configuration replacement preserve authoritative source NBT");
+            }
+        }finally{pool.shutdownNow();}
     }
     private static Object entry(String id, Optional<?> data) throws Exception { return type("net.minecraft.core.RegistrySynchronization$PackedRegistryEntry").getConstructor(type("net.minecraft.resources.Identifier"), Optional.class).newInstance(identifier(id), data); }
     private static Object registry(List<?> entries) throws Exception {

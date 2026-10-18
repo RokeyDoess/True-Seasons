@@ -6,7 +6,7 @@ public final class RegionOrderTests {
     private static int assertions;
     private static void check(boolean value, String message) { assertions++; if (!value) throw new AssertionError(message); }
     private static ChunkPos poll(ChunkMigrationEngine.Job job) {
-        ChunkPos next = job.queue.pollFirst(r -> job.regionReady(r.x(),r.z()));
+        ChunkPos next = job.queue.pollFirst(r -> job.regionProcessed(r.x(),r.z()));
         if (next != null) job.queued.remove(next); return next;
     }
     public static void main(String[] args) {
@@ -31,6 +31,18 @@ public final class RegionOrderTests {
         check(poll(job).equals(discoveredEarlier), "Deferred discovery joins only after the active region finishes");
         job.markComplete(discoveredEarlier);
         check(job.finished(), "Region scheduling preserves total completion");
+        job=new ChunkMigrationEngine.Job(null);job.scanning=true;
+        check(!job.regionProcessed(0,0),"Initial discovery still blocks region processing");
+        job.scanned=true;job.observeIndexed(a,true);job.observeIndexed(other,true);
+        check(poll(job).equals(a),"Known region work can begin during a later discovery scan");job.markComplete(a);
+        check(!job.regionReady(0,0)&&poll(job).equals(other),"Processing advances methodically during a rescan while BlueMap readiness stays closed");job.markComplete(other);
+        ChunkPos discovered=new ChunkPos(1,0);job.observeIndexed(discovered,true);
+        check(!job.regionProcessed(0,0),"Newly discovered unfinished work immediately closes its processing region");
+        check(poll(job).equals(discovered),"New discovery joins the queue after the active region completes");
+        job.markComplete(discovered);
+        check(!job.finished()&&!job.regionReady(0,0),"Finishing known work cannot declare the refreshed world or its map complete early");
+        job.scanning=false;
+        check(job.finished()&&job.regionReady(0,0),"Completing discovery releases final world and map completion");
         var spiral=new RegionWorkQueue();
         int[][] expected={{0,0},{1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1},{1,-1},{2,-1},{2,0},{2,1},{2,2},{1,2},{0,2},{-1,2},{-2,2},
             {-2,1},{-2,0},{-2,-1},{-2,-2},{-1,-2},{0,-2},{1,-2},{2,-2}};

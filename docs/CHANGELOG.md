@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1
+
+- Share foliage catch-up work fairly between players, with adjustable limits for busy servers and dense forests.
+- Reduce repeated work when several players join together.
+- Cut temporary memory use during background checks on large worlds.
+- Keep terrain moving during background checks, and leave time between slow scans for BlueMap to catch up.
+- Fix connected players getting stuck when reloading edited seasonal colors.
+- Check leftover winter markers and damaged metadata before reporting safe removal, with clearer errors in `/ts migration details`.
+
 ## 0.3.0
 
 - Ease into calendar colors over the season's opening week, with whole autumn trees changing at different times. Manual season changes remain immediate.

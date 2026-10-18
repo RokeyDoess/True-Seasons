@@ -18,6 +18,7 @@ public final class Settings {
     public final int playerRadius, snowStepColumns, snowStepTicks, snowPlayerBreakCooldownSeconds;
     public final boolean snowmelt;
     public final SnowPresentationLimits snowPresentation;
+    public final LeafPresentationLimits leafPresentation;
     public final FireflySettings fireflies;
     public final boolean seasonAnnouncements, migrationAnnouncements;
     public final double minTps, millis;
@@ -108,6 +109,7 @@ public final class Settings {
                 throw new IllegalArgumentException("Invalid " + kind + " probability");
         }
         visuals = files.get("visuals");
+        leafPresentation=LeafPresentationLimits.read(visuals);
         fireflies=FireflySettings.read(files.get("ambience"));
         colorOpeningDays=visuals.getDouble("transition.opening-days",7);
         if(!Double.isFinite(colorOpeningDays)||colorOpeningDays<0||colorOpeningDays>365)throw new IllegalArgumentException("Color opening days must be 0..365");

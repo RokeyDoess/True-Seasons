@@ -16,12 +16,12 @@ public final class GeneratedChunkIndex {
             Matcher match=NAME.matcher(path.getFileName().toString());match.matches();
             int rx=Integer.parseInt(match.group(1)),rz=Integer.parseInt(match.group(2));
             try(RandomAccessFile file=new RandomAccessFile(path.toFile(),"r")){
-                int[] locations=locations(file,path);byte[] scratch=new byte[5];
+                int[] locations=locations(file,path);var buffers=new SavedChunkStatus.ReadBuffers();
                 for(int slot=0;slot<locations.length;slot++){
                     if(Thread.currentThread().isInterrupted())throw new IOException("Index scan cancelled");
                     if(locations[slot]==0)continue;
                     ChunkPos pos=position(rx,rz,slot);
-                    try{SavedChunkState state=SavedChunkStatus.read(file,regionDirectory,pos,locations[slot],scratch);
+                    try{SavedChunkState state=SavedChunkStatus.read(file,regionDirectory,pos,locations[slot],buffers);
                         if(state.full()){generated.add(pos);states.put(pos,state);}else unfinished.add(pos);}
                     catch(IOException failure){unreadable.put(pos,failure.getMessage()==null?failure.getClass().getSimpleName():failure.getMessage());}
                 }

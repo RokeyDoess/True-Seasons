@@ -64,6 +64,9 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         public int completed() { return done.size(); }
         public int errors() { return failures.size(); }
         public boolean scanning() { return scanning; }
+        void beginScan(long now) { scanning=true; scanAt=now; }
+        void finishScan(long now) { scanning=false; scanAt=now; }
+        boolean rescanDue(long now,int seconds) { return !scanning&&now-scanAt>=seconds*1000L; }
         void markComplete(ChunkPos pos) {
             done.add(pos); queued.remove(pos); queue.remove(pos); nextStep.remove(pos); columns.remove(pos);
         }
@@ -75,7 +78,13 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         public boolean finished() { return scanned && !scanning && accounted(); }
         public boolean reportedFinished() { return scanned && accounted() && (completed || !scanning); }
         boolean regionReady(int regionX, int regionZ) {
-            if (!scanned || scanning) return false;
+            // Map rendering waits for the refreshed discovery snapshot, even while
+            // already-known terrain continues migrating within its normal budget.
+            return !scanning&&regionProcessed(regionX,regionZ);
+        }
+        /** Known terrain has finished; rendering must still use the engine's regionReady check. */
+        public boolean regionProcessed(int regionX,int regionZ) {
+            if (!scanned) return false;
             long firstX = (long) regionX * 32, firstZ = (long) regionZ * 32;
             if (firstX < Integer.MIN_VALUE || firstX + 31 > Integer.MAX_VALUE
                     || firstZ < Integer.MIN_VALUE || firstZ + 31 > Integer.MAX_VALUE) return false;
@@ -100,6 +109,9 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         }
         long coveredColumns() { return done.size()*256L+columns.values().stream().mapToLong(Integer::longValue).sum(); }
         public String error() { return error; }
+        void describeIndexFailure(ChunkPos first,String reason) {
+            error=indexFailures.isEmpty()?null:indexError(indexFailures.size(),indexFailures.contains(first)?first:null,reason);
+        }
     }
     private record Ready(Job job, ChunkPos pos, Chunk chunk, boolean loadedBefore, int generation, Throwable error) {}
     private static final class IndexApply {
@@ -107,11 +119,20 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         final Set<ChunkPos> present;
         final Iterator<ChunkPos> previous;
         final Iterator<Map.Entry<ChunkPos,String>> unreadable;
+        ChunkPos firstUnreadable;
+        String firstUnreadableReason;
         int phase, offset;
         IndexApply(Job job, GeneratedChunkIndex.Snapshot snapshot, Set<ChunkPos> present) {
             this.snapshot = snapshot; this.present = present; previous = job.diskKnown.iterator();
             unreadable = snapshot.unreadable().entrySet().iterator();
         }
+    }
+    static String indexError(int count,ChunkPos first,String reason){
+        String summary=count+" saved "+(count==1?"chunk has":"chunks have")+" unreadable metadata";
+        if(first==null)return summary;
+        String detail=reason==null||reason.isBlank()?"unknown read failure":reason.replace('\r',' ').replace('\n',' ');
+        if(detail.length()>120)detail=detail.substring(0,117)+"...";
+        return summary+"; chunk ("+first.x()+", "+first.z()+"): "+detail;
     }
     private final TrueSeasonsPlugin plugin;
     private final Map<UUID, Job> jobs = new LinkedHashMap<>();
@@ -186,7 +207,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     public void prioritizeAround(World world, ChunkPos center) {}
     private void scan(Job job) {
         if (job.scanning || closed) return;
-        job.scanning = true; job.scanAt = System.currentTimeMillis();
+        job.beginScan(System.currentTimeMillis());
         int generation = job.generation;
         var regionDirectory = job.world.getWorldPath().resolve("region");
         scanner.submit(() -> {
@@ -198,7 +219,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
             if (result != null) { present.addAll(result.generated()); present.addAll(result.unfinished()); present.addAll(result.unreadable().keySet()); }
             dispatch(() -> {
                 if (jobs.get(job.world.getUID()) != job || generation != job.generation) return;
-                if (failure != null) { job.scanning = false; job.scanned = false; job.error = failure.getMessage(); plugin.getLogger().warning("Index failed for " + job.world.getName() + ": " + job.error); }
+                if (failure != null) { job.finishScan(System.currentTimeMillis()); job.scanned = false; job.error = failure.getMessage(); plugin.getLogger().warning("Index failed for " + job.world.getName() + ": " + job.error); }
                 else job.indexing = new IndexApply(job, result, present);
             });
         });
@@ -206,7 +227,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
     /** Hydrate large saved indexes within the tick budget, never in one world-size callback. */
     private void applyIndex(Job job, long deadline) {
         IndexApply work = job.indexing; if (work == null) return;
-        for (int examined = 0; examined < 256 && System.nanoTime() < deadline; examined++) {
+        for (int examined = 0; examined < 1024 && System.nanoTime() < deadline; examined++) {
             if (work.phase == 0) {
                 if (!work.previous.hasNext()) { work.phase++; continue; }
                 ChunkPos pos = work.previous.next();
@@ -219,7 +240,6 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
             } else if (work.phase == 1) {
                 if (work.offset == work.snapshot.generated().size()) { work.phase++; work.offset = 0; continue; }
                 ChunkPos pos = work.snapshot.generated().get(work.offset++); job.diskKnown.add(pos); job.newlyGenerated.remove(pos);
-                job.observeIndexed(pos,true);
                 if (job.indexFailures.remove(pos)) { job.failures.remove(pos); if (!job.done.contains(pos)) enqueue(job,pos); }
                 SavedChunkState saved = work.snapshot.states().get(pos);
                 boolean recovering = plugin.integrations().requiresRecovery(job.world.getUID(),pos.x(),pos.z(),saved.mapRevision());
@@ -230,13 +250,14 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
                 if (!job.observedFull.contains(pos) && job.indexFailures.remove(pos)) job.failures.remove(pos);
             } else if (work.phase == 3) {
                 if (!work.unreadable.hasNext()) { work.phase++; continue; }
-                ChunkPos pos = work.unreadable.next().getKey(); job.diskKnown.add(pos);
+                var problem=work.unreadable.next();ChunkPos pos = problem.getKey(); job.diskKnown.add(pos);
                 if (job.observedFull.contains(pos) || job.done.contains(pos)) continue;
+                if(work.firstUnreadable==null){work.firstUnreadable=pos;work.firstUnreadableReason=problem.getValue();}
                 job.known.add(pos); job.unavailable.remove(pos); job.indexFailures.add(pos);
                 job.failures.put(pos,System.currentTimeMillis()+30_000); job.completed = false;
             } else {
-                job.indexing = null; job.scanning = false; job.scanned = true;
-                job.error = job.indexFailures.isEmpty()?null:job.indexFailures.size()+" saved chunks have unreadable generation metadata";
+                job.indexing = null; job.finishScan(System.currentTimeMillis()); job.scanned = true;
+                job.describeIndexFailure(work.firstUnreadable,work.firstUnreadableReason);
                 return;
             }
         }
@@ -257,7 +278,7 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         long indexDeadline = System.nanoTime() + (long) (Math.min(1.0, plugin.settings().millis) * 1_000_000);
         for (Job job : jobs.values()) {
             applyIndex(job, indexDeadline);
-            if (now - job.scanAt >= plugin.settings().rescanSeconds * 1000L) scan(job);
+            if (job.rescanDue(now,plugin.settings().rescanSeconds)) scan(job);
             for (var iterator = job.failures.entrySet().iterator(); iterator.hasNext();) {
                 var failure = iterator.next();
                 if (failure.getValue() <= now && !job.indexFailures.contains(failure.getKey())) { enqueue(job, failure.getKey()); iterator.remove(); }
@@ -280,8 +301,8 @@ public final class ChunkMigrationEngine implements Listener, AutoCloseable {
         while (!worlds.isEmpty() && inFlight < plugin.settings().concurrency && attempts++ < worlds.size() * plugin.settings().concurrency
                 && System.nanoTime() < deadline) {
             Job job = worlds.get(Math.floorMod(rotating++, worlds.size()));
-            if (!job.scanned || job.scanning) continue;
-            ChunkPos pos = job.queue.pollFirst(region -> job.regionReady(region.x(), region.z())); if (pos == null) continue;
+            if (!job.scanned) continue; // Initial discovery is mandatory; later rescans do not stall known work.
+            ChunkPos pos = job.queue.pollFirst(region -> job.regionProcessed(region.x(), region.z())); if (pos == null) continue;
             if(!job.queued.remove(pos))continue;
             if (!job.known.contains(pos)||job.done.contains(pos) || job.unavailable.contains(pos) || job.flight.contains(pos) || job.failures.containsKey(pos)) continue;
 

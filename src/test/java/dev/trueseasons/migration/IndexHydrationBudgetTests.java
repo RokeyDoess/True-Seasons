@@ -22,7 +22,7 @@ public final class IndexHydrationBudgetTests {
         check(!job.scanned && job.scanning && indexing.get(job) == work, "Expired budget preserves pending index work");
         apply.invoke(engine,job,Long.MAX_VALUE);
         int remaining = 0; for (var rows = (Iterator<?>)iterator.get(work); rows.hasNext();) { rows.next(); remaining++; }
-        check(remaining == 204_800 - 256, "One large-world hydration call examines at most 256 records");
+        check(remaining == 204_800 - 1024, "One large-world hydration call examines at most 1024 records within its time allowance");
         check(!job.scanned && job.scanning, "Partial hydration cannot release migration or BlueMap readiness");
         apply.invoke(engine,job,Long.MAX_VALUE);
         check(job.scanned && !job.scanning && indexing.get(job) == null, "Exhausted phases release readiness only after completion");

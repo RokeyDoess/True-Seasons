@@ -238,10 +238,6 @@ public final class PaperBiomePackets {
         Object access = server.getClass().getMethod("registryAccess").invoke(server);
         Object nbtOps = type("net.minecraft.nbt.NbtOps").getField("INSTANCE").get(null);
         Object registryOps = type("net.minecraft.resources.RegistryOps").getMethod("create", type("com.mojang.serialization.DynamicOps"), type("net.minecraft.core.HolderLookup$Provider")).invoke(null, nbtOps, access);
-        Object biomeKey = type("net.minecraft.core.registries.Registries").getField("BIOME").get(null);
-        Object biomes = type("net.minecraft.core.RegistryAccess").getMethod("lookupOrThrow", type("net.minecraft.resources.ResourceKey")).invoke(access, biomeKey);
-        // Keep the complete lookup context for codecs, but encode only the registry we use.
-        Object biomeAccess = type("net.minecraft.core.RegistryAccess$ImmutableRegistryAccess").getConstructor(List.class).newInstance(List.of(biomes));
         Map<String, Object> data = new HashMap<>();
         BiConsumer<Object, List<?>> collect = (key, entries) -> {
             try {
@@ -249,7 +245,7 @@ public final class PaperBiomePackets {
                     data.put(call(entry, "id").toString(), ((Optional<?>) call(entry, "data")).orElseThrow());
             } catch (ReflectiveOperationException failure) { throw new IllegalStateException(failure); }
         };
-        type("net.minecraft.core.RegistrySynchronization").getMethod("packRegistries", type("com.mojang.serialization.DynamicOps"), type("net.minecraft.core.RegistryAccess"), Set.class, BiConsumer.class).invoke(null, registryOps, biomeAccess, Set.of(), collect);
+        type("net.minecraft.core.RegistrySynchronization").getMethod("packRegistries", type("com.mojang.serialization.DynamicOps"), type("net.minecraft.core.RegistryAccess"), Set.class, BiConsumer.class).invoke(null, registryOps, access, Set.of(), collect);
         if (data.isEmpty()) throw new IllegalStateException("No authoritative biome climate registry available");
         return Map.copyOf(data);
     }

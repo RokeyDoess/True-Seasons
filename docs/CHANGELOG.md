@@ -5,7 +5,6 @@
 ## 0.3.4
 
 - Reduce the CPU and temporary memory needed to discover saved terrain on large worlds.
-- Reduce startup work when preparing seasonal colors and weather.
 - Skip extra BlueMap renders when another season's unused palette changes, including in climate-exempt biomes.
 
 ## 0.3.3

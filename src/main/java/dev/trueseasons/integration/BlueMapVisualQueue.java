@@ -41,14 +41,17 @@ final class BlueMapVisualQueue implements AutoCloseable {
     }
     /** The native world's listRegions only lists saved region coordinates; it never generates chunks. */
     void target(String map, String fingerprint, Callable<Collection<Vector2i>> existingRegions) {
-        target(map,fingerprint,null,existingRegions);
+        target(map,fingerprint,List.of(),existingRegions);
     }
     /** Equivalent old targets keep their region receipts and generation during the format upgrade. */
     void target(String map,String fingerprint,String equivalent,Callable<Collection<Vector2i>> existingRegions){
+        target(map,fingerprint,equivalent==null?List.of():List.of(equivalent),existingRegions);
+    }
+    void target(String map,String fingerprint,Collection<String> equivalents,Callable<Collection<Vector2i>> existingRegions){
         MapState state = maps.computeIfAbsent(map, ignored -> new MapState());
         collectRebinding(state);
         if (state.target.equals(fingerprint) && (state.discovery == null || !state.discovery.isCompletedExceptionally())) return;
-        if(equivalent!=null&&state.target.equals(equivalent)&&!equivalent.equals(fingerprint)){
+        if(equivalents.contains(state.target)&&!state.target.equals(fingerprint)){
             regions(map);
             // Let an existing discovery or receipt finish without replacing its work.
             if(state.discovery!=null||state.receipt!=null)return;

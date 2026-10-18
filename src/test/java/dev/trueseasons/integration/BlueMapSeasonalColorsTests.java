@@ -147,6 +147,21 @@ public final class BlueMapSeasonalColorsTests {
         check(color(autumn, "minecraft:desert", "minecraft:oak_leaves") == color(nativeCalculator, "minecraft:desert", "minecraft:oak_leaves"), "hot winter uses native colour");
         colors.update(new SeasonalVisualState(resolver, Season.SUMMER, Set.of(world)));
         check(color(autumn, "minecraft:snowy_plains", "minecraft:grass_block") == color(nativeCalculator, "minecraft:snowy_plains", "minecraft:grass_block"), "cold summer uses native colour");
+        for(Season active:List.of(Season.AUTUMN,Season.WINTER,Season.SUMMER)){
+            Season unused=active==Season.SUMMER?Season.WINTER:Season.SUMMER;
+            var before=new SeasonalVisualState(resolver,active,Set.of(world));colors.update(before);
+            String excluded=active==Season.SUMMER?"minecraft:snowy_plains":"minecraft:jungle";
+            for(String block:List.of("minecraft:grass_block","minecraft:oak_leaves")){
+                int land=color(autumn,"minecraft:plains",block),nativeBiome=color(autumn,excluded,block);
+                config.set("palettes.temperate."+unused.key(),List.of("123456","ABCDEF"));
+                var after=new SeasonalVisualState(new SeasonVisualResolver(config,new SeasonClimatePolicy(SeasonClimatePolicy.HOT,SeasonClimatePolicy.COLD)),active,Set.of(world));
+                colors.update(after);
+                check(color(autumn,"minecraft:plains",block)==land&&color(autumn,excluded,block)==nativeBiome,"Actual native calculator ignores unused palette in "+active+" for "+block);
+                check(color(autumn,excluded,block)==color(nativeCalculator,excluded,block),"Exempt biome still delegates to native colours after inactive-season edit");
+                check(before.fingerprint(world).equals(after.fingerprint(world)),"Unchanged native-rendered pixels preserve map work across unused "+unused+" palette edits");
+                config.set("palettes.temperate."+unused.key(),List.of("83B957","D98637"));colors.update(before);
+            }
+        }
         colors.update(new SeasonalVisualState(resolver, Season.AUTUMN, Set.of()));
         check(color(autumn, "minecraft:plains", "minecraft:oak_leaves") == color(nativeCalculator, "minecraft:plains", "minecraft:oak_leaves"), "cleanup restores native tint immediately");
         colors.update(new SeasonalVisualState(resolver, Season.AUTUMN, Set.of(world)));

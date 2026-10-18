@@ -295,6 +295,40 @@ public final class GeneratedChunkSnapshotTests {
         check(snapshot.unreadable().values().stream().allMatch(reason->reason.contains("ChunkBukkitValues")),"Unreadable metadata containers retain their diagnostic");
         check(Arrays.equals(before,Files.readAllBytes(region)),"Malformed metadata is left untouched for safe recovery");
     }
+    private static void decodedBufferBoundaries(Path parent)throws IOException{
+        Path directory=Files.createDirectory(parent.resolve("decoded-buffer-boundaries")),region=directory.resolve("r.0.0.mca");
+        String version="saved-"+"v".repeat(8200)+"\u0000é中\uD83C\uDF3F",revision="map-\u0000é中\uD83C\uDF3F";
+        var expected=new SavedChunkState(true,version,version,true,129,true,true,revision);
+        List<Integer> locations=new ArrayList<>();List<byte[]> originals=new ArrayList<>();
+        try(var file=new RandomAccessFile(region.toFile(),"rw")){
+            file.setLength(80*4096L);int slot=0;
+            for(int format:new int[]{1,2,3})for(int padding:new int[]{0,1,254,255,256,257,8190,8191,8192,8193,16383,16384}){
+                var bytes=new ByteArrayOutputStream();var data=new DataOutputStream(bytes);data.writeByte(10);data.writeUTF("");
+                tag(data,new Tag(7,"padding",new byte[padding]));
+                tag(data,text("ignored", "a".repeat(9000)+"\u0000é中"));tag(data,text("Status","full"));
+                tag(data,new Tag(10,"ChunkBukkitValues",new Tag[]{text("trueseasons:season_version",version),
+                    text("trueseasons:winter_pending",version),integer("trueseasons:winter_cursor",129),text("trueseasons:bluemap_revision",revision)}));data.writeByte(0);
+                byte[] nbt=bytes.toByteArray();
+                for(boolean truncated:new boolean[]{false,true}){
+                    byte[] encoded=payload(truncated?Arrays.copyOf(nbt,nbt.length-1):nbt,format);int location=((slot+2)<<8)|1;
+                    file.seek(slot*4L);file.writeInt(location);file.seek((slot+2)*4096L);file.writeInt(1);file.writeByte(128|format);
+                    Files.write(directory.resolve("c."+(slot&31)+"."+(slot>>5)+".mcc"),encoded);locations.add(location);originals.add(encoded);slot++;
+                }
+            }
+        }
+        byte[] before=Files.readAllBytes(region);var buffers=new SavedChunkStatus.ReadBuffers();
+        try(var file=new RandomAccessFile(region.toFile(),"r")){
+            for(int slot=0;slot<locations.size();slot++){
+                ChunkPos pos=new ChunkPos(slot&31,slot>>5);
+                Path actual=directory.resolve("c."+pos.x()+"."+pos.z()+".mcc");
+                if((slot&1)==0)check(SavedChunkStatus.read(file,directory,pos,locations.get(slot),buffers).equals(expected),"Decoded buffer keeps exact checkpoints across arrays, long modified UTF, compression and refill boundaries");
+                else try{SavedChunkStatus.read(file,directory,pos,locations.get(slot),buffers);throw new AssertionError("Truncated root reused stale decoded bytes");}
+                    catch(IOException rejected){check(true,"Truncated root stays unreadable after large valid buffer contents");}
+                check(Arrays.equals(originals.get(slot),Files.readAllBytes(actual)),"Index reads preserve the complete external compressed record");
+            }
+        }
+        check(Arrays.equals(before,Files.readAllBytes(region)),"Decoded buffering leaves region bytes untouched");
+    }
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("trueseasons-status-regression-");
         try {
@@ -333,7 +367,7 @@ public final class GeneratedChunkSnapshotTests {
             checkpoints(directory);
             sharedRegion(directory);
             decompressionLimit(directory);
-            ignoredUtf();ignoredPayloads(directory);reusedEncodedBuffers(directory);malformedMetadataContainer(directory);
+            ignoredUtf();ignoredPayloads(directory);reusedEncodedBuffers(directory);malformedMetadataContainer(directory);decodedBufferBoundaries(directory);
         } finally {
             try (var paths = Files.walk(directory)) {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);

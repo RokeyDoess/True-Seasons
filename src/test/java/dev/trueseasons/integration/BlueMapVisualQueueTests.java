@@ -143,12 +143,16 @@ public final class BlueMapVisualQueueTests {
         }
         try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
             String generation=queue.receiptToken(map);
-            queue.target(map,"scoped","legacy",noDiscovery);rebound(queue,map);
+            queue.target(map,"scoped",List.of("older-legacy","legacy"),noDiscovery);rebound(queue,map);
             check(queue.target(map).equals("scoped")&&queue.pending()==0,"equivalent completed palette changes target without reopening regions");
             check(queue.receiptToken(map).equals(generation),"equivalent upgrade keeps outstanding render generations valid");
         }
         try(BlueMapVisualQueue queue=new BlueMapVisualQueue(directory)){
             check(queue.target(map).equals("scoped")&&queue.pending()==0,"equivalent fingerprint remains durable across restart");
+            queue.target("second-format","older-legacy",()->regions);discovered(queue,"second-format");
+            queue.acknowledge("second-format",queue.receiptToken("second-format"),regions);acknowledged(queue,"second-format");
+            queue.target("second-format","scoped",List.of("older-legacy","legacy"),noDiscovery);rebound(queue,"second-format");
+            check(queue.target("second-format").equals("scoped")&&queue.pending()==0,"either published equivalent format upgrades without new renders");
             queue.target(map,"scoped","legacy",noDiscovery);
             queue.target(map,"legacy-partial",()->regions);discovered(queue,map);
             queue.acknowledge(map,queue.receiptToken(map),List.of(regions.getFirst()));acknowledged(queue,map);

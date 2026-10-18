@@ -10,6 +10,7 @@ final class SavedChunkStatus {
     /** Owned by one region reader; encoded bytes must never share the inflater's scratch storage. */
     static final class ReadBuffers {
         final byte[] scratch=new byte[8192];
+        final byte[] decoded=new byte[8192];
         private byte[] encoded=new byte[8192];
         private byte[] encoded(int size){
             if(encoded.length<size)encoded=new byte[Math.min(LIMIT,Math.max(size,encoded.length*2))];
@@ -55,7 +56,7 @@ final class SavedChunkStatus {
         }
         Parsed parsed=new Parsed();
         try(InputStream stream=decode(new ByteArrayInputStream(bytes,0,length),format&127);
-            DataInputStream input=new DataInputStream(new BufferedInputStream(new Bounded(stream,scratch),256))){
+            DataInputStream input=new DataInputStream(new LocalInput(new Bounded(stream,scratch),buffers==null?new byte[256]:buffers.decoded))){
             if(input.readUnsignedByte()!=10)throw new IOException("Chunk NBT root is not a compound");
             input.readUTF();compound(input,"",0,parsed,scratch);
         }
@@ -144,6 +145,32 @@ final class SavedChunkStatus {
             case 10 -> { for(int child;(child=input.readUnsignedByte())!=0;) { skipUtf(input,scratch); skip(input,child,depth+1,scratch); } }
             default -> throw new IOException("Unknown NBT type "+type);
         }
+    }
+    /** Private to one decode; the region's byte storage is reused only after close. */
+    private static final class LocalInput extends InputStream {
+        private final InputStream source;
+        private final byte[] bytes;
+        private int offset,count;
+        private boolean closed;
+        LocalInput(InputStream source,byte[] bytes){this.source=source;this.bytes=bytes;}
+        private void open()throws IOException{if(closed)throw new IOException("Stream closed");}
+        private boolean fill()throws IOException{
+            offset=0;count=source.read(bytes,0,bytes.length);
+            if(count==0){int value=source.read();if(value>=0){bytes[0]=(byte)value;count=1;}else count=-1;}
+            return count>0;
+        }
+        @Override public int read()throws IOException{open();if(offset>=count&&!fill())return -1;return bytes[offset++]&255;}
+        @Override public int read(byte[] target,int start,int length)throws IOException{
+            open();java.util.Objects.checkFromIndexSize(start,length,target.length);if(length==0)return 0;
+            if(offset>=count){if(length>=bytes.length)return source.read(target,start,length);if(!fill())return -1;}
+            int copied=Math.min(length,count-offset);System.arraycopy(bytes,offset,target,start,copied);offset+=copied;return copied;
+        }
+        @Override public long skip(long length)throws IOException{
+            open();if(length<=0)return 0;if(offset>=count)return source.skip(length);
+            int skipped=(int)Math.min(length,count-offset);offset+=skipped;return skipped;
+        }
+        @Override public int available()throws IOException{open();return Math.max(0,count-offset)+source.available();}
+        @Override public void close()throws IOException{if(!closed){closed=true;source.close();}}
     }
     private static final class Bounded extends FilterInputStream {
         private int remaining=LIMIT;

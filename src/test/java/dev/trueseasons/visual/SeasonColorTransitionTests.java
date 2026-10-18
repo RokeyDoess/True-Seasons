@@ -89,6 +89,7 @@ public final class SeasonColorTransitionTests {
         // Captured from the published 0.3.2 jar, not calculated with this implementation.
         String legacyRoot="29915aeb152ed70ac91b2de0ca76515417c98ecda059b28552bfc9711f032daf";
         var legacyResolver=new SeasonVisualResolver(yaml);UUID legacyWorld=new UUID(0,1);
+        publishedScopedAliases(yaml,legacyWorld);
         for(Season season:Season.values()){
             String suffix=season==Season.AUTUMN?"/trees=true/1":season==Season.SPRING?"/blossoms=true/scattered1/20/25/1":"";
             check(new SeasonalVisualState(legacyResolver,season,Set.of(legacyWorld),Map.of(legacyWorld,1L)).legacyFingerprint(legacyWorld).equals(season.key()+"/"+legacyRoot+suffix),"Equivalent upgrade recognizes the exact published 0.3.2 target for "+season);
@@ -107,13 +108,41 @@ public final class SeasonColorTransitionTests {
         yaml.set("palettes.temperate.autumn",List.of("FFFFFF","000000"));var autumn=new SeasonVisualResolver(yaml,climate);
         check(!after.endpointFingerprint(Season.AUTUMN).equals(autumn.endpointFingerprint(Season.AUTUMN)),"Active palette edits still redraw the map");
         yaml.set("palettes.temperate.summer",List.of("112233","445566"));var summer=new SeasonVisualResolver(yaml,climate);
-        for(Season season:Season.values())check(autumn.endpointFingerprint(season).equals(summer.endpointFingerprint(season))==(season==Season.SPRING),"Summer colors also invalidate autumn and winter maps where exempt hot biomes use them");
+        for(Season season:Season.values())check(autumn.endpointFingerprint(season).equals(summer.endpointFingerprint(season))==(season!=Season.SUMMER),"Native hot-biome colors never depend on an unused summer fallback palette in autumn or winter");
         yaml.set("palettes.temperate.winter",List.of("778899","AABBCC"));var winter=new SeasonVisualResolver(yaml,climate);
-        for(Season season:Season.values())check(summer.endpointFingerprint(season).equals(winter.endpointFingerprint(season))==(season==Season.SPRING||season==Season.AUTUMN),"Winter colors also invalidate summer maps where exempt cold biomes use them");
+        for(Season season:Season.values())check(summer.endpointFingerprint(season).equals(winter.endpointFingerprint(season))==(season!=Season.WINTER),"Native cold-biome colors never depend on an unused winter fallback palette in summer");
+        for(Season season:Season.values()){
+            check(autumn.legacyScopedEndpointFingerprint(season).equals(summer.legacyScopedEndpointFingerprint(season))==(season==Season.SPRING),"Published 0.3.3 aliases retain their original summer fallback dependency for upgrade recognition");
+            check(summer.legacyScopedEndpointFingerprint(season).equals(winter.legacyScopedEndpointFingerprint(season))==(season==Season.SPRING||season==Season.AUTUMN),"Published 0.3.3 aliases retain their original winter fallback dependency for upgrade recognition");
+        }
         var allBefore=new SeasonVisualResolver(yaml,dev.trueseasons.climate.SeasonClimatePolicy.ALL);
         yaml.set("palettes.temperate.summer",List.of("000000","FFFFFF"));var allAfter=new SeasonVisualResolver(yaml,dev.trueseasons.climate.SeasonClimatePolicy.ALL);
         for(Season season:Season.values())check(allBefore.endpointFingerprint(season).equals(allAfter.endpointFingerprint(season))==(season!=Season.SUMMER),"Without climate fallbacks only the edited summer map changes");
         yaml.set("enabled",false);var disabled=new SeasonalVisualState(new SeasonVisualResolver(yaml,climate),Season.AUTUMN,Set.of(world));
         check(disabled.fingerprint(world).equals("vanilla")&&disabled.legacyFingerprint(world).equals("vanilla"),"Inactive worlds keep the same native restoration target");
+    }
+    private static void publishedScopedAliases(YamlConfiguration yaml,UUID world){
+        // Captured by running the published 0.3.3 jar with these exact palettes and policies.
+        var all=Map.of(
+            Season.SPRING,"e1c6f16414842692308c4e1080a47a275708549c728d706193e4bab829050a6d",
+            Season.SUMMER,"9e21c612d18ce2d57d822e554bc658ad8eac8284498a7c19104c8efdbac17869",
+            Season.AUTUMN,"4ab05c9a6a77bbd8bf77478c1b930e31c2f081c6a88986927fd5e543ab0d1377",
+            Season.WINTER,"531a257a8c4c57e5d1ef10f2aa57ab66e2b1995eaca2e20b4710aaaa9f6ac17f");
+        var excluded=Map.of(
+            Season.SPRING,all.get(Season.SPRING),
+            Season.SUMMER,"6812c9ad27c0359e76a679e97f85e9f7ef2ac0a0c9e7de8c5483b1389aceb5db",
+            Season.AUTUMN,"6937f77d1239bced9cb8c7aa2b532ee0caba0dcea0a8c530fc58417e61ca86cf",
+            Season.WINTER,"245c9fc8fad9a7123b4d959856d2a580c2e583783af9a8e0eabd381518a05eaa");
+        for(boolean exemptions:List.of(false,true)){
+            var climate=exemptions?new dev.trueseasons.climate.SeasonClimatePolicy(List.of("desert"),List.of("snowy"),List.of("jungle")):dev.trueseasons.climate.SeasonClimatePolicy.ALL;
+            var resolver=new SeasonVisualResolver(yaml,climate);
+            for(Season season:Season.values()){
+                var state=new SeasonalVisualState(resolver,season,Set.of(world),Map.of(world,1L));
+                String suffix=season==Season.AUTUMN?"/trees=true/1":season==Season.SPRING?"/blossoms=true/scattered1/20/25/1":"";
+                String published=season.key()+"/"+(exemptions?excluded:all).get(season)+suffix;
+                check(state.fingerprintAliases(world).contains(published),"Equivalent saved 0.3.3 target remains recognizable for "+season+" exclusions="+exemptions);
+                if(!exemptions)check(state.fingerprint(world).equals(published),"No fingerprint rewrite is needed when the older palette already described only active map colors");
+            }
+        }
     }
 }

@@ -20,6 +20,7 @@ public final class SeasonVisualResolver {
     private final String fingerprint;
     private final String endpointFingerprint;
     private final Map<Season,String> seasonEndpoints;
+    private final Map<Season,String> legacyScopedEndpoints;
     private final String registryFingerprint;
     private final Map<Season,Season> previous;
     public SeasonVisualResolver(YamlConfiguration config) {
@@ -52,6 +53,7 @@ public final class SeasonVisualResolver {
         }
         endpointFingerprint=computeEndpointFingerprint();
         var endpoints=new EnumMap<Season,String>(Season.class);
+        var legacyEndpoints=new EnumMap<Season,String>(Season.class);
         for(Season season:Season.values()){
             var profiles=new EnumMap<Season,Map<String,SeasonVisualProfile>>(Season.class);
             for(Season rendered:climate.paletteSeasons(season)){
@@ -59,9 +61,14 @@ public final class SeasonVisualResolver {
                 palettes.forEach((family,values)->familiesForSeason.put(family,values.get(rendered)));
                 profiles.put(rendered,familiesForSeason);
             }
-            endpoints.put(season,digest("season1/"+CONTENT_VERSION+"\n"+enabled+"\n"+families+"\n"+profiles+"\n"+climate.signature(season)));
+            legacyEndpoints.put(season,scopedFingerprint(season,profiles));
+            // BlueMap delegates excluded biomes to its native calculator. Only the
+            // active season's palette can contribute seasonal pixels to this map.
+            profiles.keySet().removeIf(rendered->rendered!=season);
+            endpoints.put(season,scopedFingerprint(season,profiles));
         }
         seasonEndpoints=Map.copyOf(endpoints);
+        legacyScopedEndpoints=Map.copyOf(legacyEndpoints);
         registryFingerprint=digest(endpointFingerprint+"\n"+new TreeMap<>(previous)+"\n"+gradualColors);
         fingerprint=digest(registryFingerprint+"\n"+autumnTrees+"/"+springBlossoms+"/"+blossoms.signature());
     }
@@ -105,6 +112,11 @@ public final class SeasonVisualResolver {
     }
     public String endpointFingerprint(){return endpointFingerprint;}
     public String endpointFingerprint(Season season){return seasonEndpoints.get(Objects.requireNonNull(season));}
+    /** Published 0.3.3 format, for upgrading equivalent saved map targets only. */
+    public String legacyScopedEndpointFingerprint(Season season){return legacyScopedEndpoints.get(Objects.requireNonNull(season));}
+    private String scopedFingerprint(Season season,Map<Season,Map<String,SeasonVisualProfile>> profiles){
+        return digest("season1/"+CONTENT_VERSION+"\n"+enabled+"\n"+families+"\n"+profiles+"\n"+climate.signature(season));
+    }
     public String registryFingerprint(){return registryFingerprint;}
     private String computeEndpointFingerprint() {
         return digest(CONTENT_VERSION+"\n" + enabled + "\n" + families + "\n" + new TreeMap<>(palettes) + "\n" + climate.signature());

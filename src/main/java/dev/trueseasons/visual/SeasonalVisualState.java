@@ -24,6 +24,10 @@ public record SeasonalVisualState(SeasonVisualResolver resolver, Season season, 
     }
     /** Exact previous-format target, used only when upgrading equivalent saved map work. */
     public String legacyFingerprint(UUID world){return fingerprint(world,resolver.endpointFingerprint());}
+    /** Published saved formats whose pixels match the current endpoint exactly. */
+    public List<String> fingerprintAliases(UUID world){
+        return List.of(legacyFingerprint(world),fingerprint(world,resolver.legacyScopedEndpointFingerprint(season)));
+    }
     private String fingerprint(UUID world,String endpoint){
         if(!active(world))return "vanilla";
         return season.key()+"/"+endpoint

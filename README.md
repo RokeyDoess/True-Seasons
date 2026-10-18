@@ -1,6 +1,6 @@
 # True Seasons
 
-[![Latest prerelease: v0.3.3](https://img.shields.io/badge/prerelease-v0.3.3-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.3)
+[![Latest prerelease: v0.3.4](https://img.shields.io/badge/prerelease-v0.3.4-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.4)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
 [![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
@@ -11,7 +11,7 @@ True Seasons brings seasons to the world you've already built, using Minecraft's
 
 **No resource pack. No client mod.** Players join with ordinary Minecraft.
 
-**Latest prerelease: [0.3.3](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.3).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
+**Latest prerelease: [0.3.4](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.4).** Find all published builds in [Releases](https://github.com/RokeyDoess/True-Seasons/releases).
 
 ## Seasons that feel like Minecraft
 
@@ -39,7 +39,7 @@ True Seasons is a heavier plugin by nature. Changing real terrain across a large
 
 Terrain updates run in small, configurable batches, back off after busy ticks and pause below **18.5 TPS** by default. Snow previews and foliage catch-up use server-wide update budgets to limit extra work as more players connect. Map changes are combined, and completed regions are saved before their render is requested. Gradual snow previews add no extra BlueMap renders.
 
-World discovery runs in the background and avoids repeated file opens for individual chunks. Chunk tracking also handles dense generated areas efficiently, reducing the work needed to find and resume saved progress.
+World discovery runs in the background, reuses read buffers and avoids repeated file opens for individual chunks. Chunk tracking also handles dense generated areas efficiently, reducing the work needed to find and resume saved progress.
 
 Large worlds can take time to finish a transition. You can favor a lighter server workload or faster updates through the settings; hardware, player activity and your other plugins affect the result. See the [server guide](docs/SERVER_GUIDE.md#performance-and-settings) for the controls.
 

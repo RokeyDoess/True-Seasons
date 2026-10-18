@@ -28,7 +28,7 @@ public final class SeasonalColorsRuntimeProbe extends JavaPlugin {
         verifyUpgrade=Files.exists(Path.of("palette-legacy-upgrade.txt"));
         if(verifyUpgrade)try{
             var saved=BlueMapPaletteScopeProbe.snapshot(seasons.integrations());
-            if(saved.values().stream().noneMatch(value->value.startsWith(seasons.visualState().legacyFingerprint(world.getUID())+"/generation=")))throw new AssertionError("Expected saved published-format autumn target");
+            if(saved.values().stream().noneMatch(value->seasons.visualState().fingerprintAliases(world.getUID()).stream().anyMatch(alias->value.startsWith(alias+"/generation="))))throw new AssertionError("Expected saved published-format autumn target");
         }catch(Exception failure){throw new IllegalStateException("Upgrade fixture unavailable",failure);}
         Bukkit.getScheduler().runTaskTimer(this,()->{
             try {
@@ -53,6 +53,7 @@ public final class SeasonalColorsRuntimeProbe extends JavaPlugin {
                     originalVisuals=Files.readString(visuals);originalConfig=Files.readString(config);
                     var colors=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(visuals.toFile());
                     colors.set("palettes.temperate.spring",List.of("123456","ABCDEF"));colors.save(visuals.toFile());
+                    colors.set("palettes.temperate.summer",List.of("112233","445566"));colors.save(visuals.toFile());
                     var settings=org.bukkit.configuration.file.YamlConfiguration.loadConfiguration(config.toFile());
                     settings.set("climate.summer-excluded-biome-fragments",List.of("snowy","frozen","minecraft:grove","ice_spikes","cold_ocean","deep_dark"));settings.save(config.toFile());
                     String before=seasons.visualState().fingerprint(world.getUID());seasons.reloadSettings();

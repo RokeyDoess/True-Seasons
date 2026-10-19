@@ -1,96 +1,69 @@
-# PacketEvents experiment
+# Optional PacketEvents compatibility experiment
 
-This branch tests whether moving seasonal packet handling to PacketEvents would improve compatibility and reduce maintenance. It is based on True Seasons 0.3.5. It does not change the published release.
+This continues the earlier [transport comparison](PACKETEVENTS_TRANSPORT_COMPARISON.md). The current experimental build is `0.3.5-packetevents.2`, based on published 0.3.5. It keeps True Seasons' native packet handling and makes PacketEvents optional.
 
-## Findings
+## Approach
 
-**There is a concrete compatibility benefit, but no demonstrated overall performance improvement.**
+Ordinary PacketEvents sends already enter True Seasons' existing native handler. They arrive as encoded buffers, which the published handler forwards without seasonal processing. That explains why a normal PacketEvents leaf update could turn an autumn leaf green.
 
-The existing transport worked with the tested GrimAC, ProtocolLib and ViaVersion stack. It is not generally incompatible with those plugins. However, an ordinary block update sent through PacketEvents' public API bypassed the existing native packet handler. Sending a birch leaf update during autumn made that leaf green again. The experimental transport caught the same update and kept the autumn appearance. Grim tracked the block state that reached the client in both cases.
+The compatibility path recognizes only encoded single-block and section-block updates during gameplay. It decodes those with Paper's native codecs, applies the existing leaf and snow logic, and forwards the result through the normal pipeline. It does not add a transport listener or another channel handler. Native packet objects continue through the existing path without the extra decode/encode round trip used by the first experiment.
 
-That matters for plugins which send their own block appearances. It does not prove that every plugin using PacketEvents conflicts today, or that this experiment fixes every possible conflict. Sends that deliberately bypass listeners can still bypass our changes. Later listeners can also replace an earlier listener's work.
+- Unrelated encoded packets retain their buffer, data, reader position and ownership.
+- Unchanged block updates retain their original buffer. Changed updates get a new buffer; shared input bytes remain untouched.
+- The existing presentation caches receive the underlying block states, so later seasonal restoration keeps replacements and does not restore painted leaves as originals.
+- Configuration traffic is excluded until a gameplay dimension is known. Reconfiguration and retired presentation also bypass encoded gameplay handling.
+- PacketEvents is an optional load-order dependency. Its API is a compile-only dependency for the registry bookkeeping described below, not a required installed plugin.
 
-**Adding standalone PacketEvents does not put Grim and True Seasons into one shared listener order.** The tested Grim build bundles a separate, relocated copy of PacketEvents. Both packet handlers appeared in the connection pipeline. The ordering between those two copies still needs testing.
+## Registry bookkeeping
 
-## What the prototype changes
+The wider audit found a separate issue: PacketEvents caches synchronized registries globally by protocol version. Without compatibility bookkeeping, client-only seasonal aliases can enter that shared cache. A live palette reload can then update the Minecraft client while the library still exposes the old palette.
 
-- Seasonal packets enter through a PacketEvents listener instead of True Seasons' own Netty handler.
-- Existing leaf, biome and snow logic remains in use, including its work limits and restoration behavior.
-- Configuration updates keep PacketEvents' per-player biome registry consistent with the expanded registry sent to the client. The shared vanilla registry cache is left alone.
-- Generated updates retain their identity while writes are delayed, preventing our own already-painted packets from being processed again.
-- Closing seasonal presentation restores appearances and keeps the necessary biome-width adapter until the connection closes.
-- An optional second experiment reads and writes chunk sections using PacketEvents' palette classes.
+A metadata-only compatibility hook handles this during configuration:
 
-This is a transport prototype, **not a completed removal of native Minecraft packet code**. It decodes packets into the existing native helpers and encodes changed packets again. That extra work is a reason to avoid treating this branch as the final implementation or using its timings to predict an optimized wrapper port.
+1. Before our expanded registry reaches PacketEvents, populate an empty shared biome cache from the real server definitions. Existing library-owned entries are not overwritten.
+2. Observe the biome registry already being sent by the native handler and assign the matching seasonal registry to that player.
+3. Share one immutable projection across equal joins, replacing the cache when its definitions change. Known-pack negotiation uses materialized original biome definitions.
 
-## Tested stack
+The hook does not edit, cancel or send packets. Ordinary seasonal updates never pass through its API. It stays attached only for tracked connections and releases its cached projection after retirement and disconnect.
 
-| Component | Version |
-| --- | --- |
-| Paper / client protocol | 26.3 |
-| True Seasons baseline | 0.3.5 |
-| Experimental build | 0.3.5-packetevents.1 |
-| Standalone PacketEvents | 2.14.0 |
-| GrimAC | 2.3.74-3bc8959 |
-| PacketEvents bundled inside that Grim build | 2.14.1+c11273e-SNAPSHOT |
-| ProtocolLib | 5.5.0-SNAPSHOT-d89a5de |
-| ViaVersion | 5.12.1 |
+## Verification
 
-Tests used isolated localhost server copies, existing terrain and non-op clients without Grim exemptions. The installed test server and main checkout were not changed. Downloaded plugins, server copies, profiles and raw logs remain local.
+Tests use private localhost server copies, existing terrain and whitelisted non-op protocol clients without Grim exemptions. No terrain generation or population is allowed. Downloaded plugins, profiles, raw logs and test worlds remain local.
 
-## Results
+Tested versions: Paper/client protocol 26.3, PacketEvents 2.14.0, GrimAC 2.3.74-3bc8959, ProtocolLib 5.5.0-SNAPSHOT-d89a5de and ViaVersion 5.12.1. Grim includes a separate relocated PacketEvents copy; True Seasons does not replace or reconfigure it.
 
-| Check | Result |
-| --- | --- |
-| Published native transport with Grim | Passed native wire checks and sampled Grim terrain checks |
-| Published native transport with all four packet plugins | Passed ordinary joins and autumn → summer → autumn updates |
-| Public PacketEvents leaf update during autumn | Native transport reproduced the green-leaf issue; prototype preserved the autumn leaf |
-| Four concurrent clients, full stack | Passed with and without known-pack negotiation; each received 213 visible chunks |
-| Delayed writes during a season change | Passed; queued changes reached the expected final appearance |
-| Earlier wrapper edits, later overrides and cancellation | Actual wire state followed the intended listener order; cancellation preserved the previous appearance |
-| Disconnect with a delayed write still queued | Connection bindings and generated-message tracking both returned to zero |
-| Live palette reload | All four clients reconfigured, received the changed palette and returned to the full view |
-| Biome registry after join and palette reload | Client and standalone PacketEvents both had all 2,881 entries |
-| Snow preview and melt over 160 eligible columns | Passed accumulation, digging, melt, re-accumulation and presentation retirement |
-| Preview digging | Received the native acknowledgment; the broken preview stayed clear during its grace period |
-| Physical blocks beneath packet snow | Fixture remained unchanged throughout the snow-flow check |
-| Existing standalone regression suites | Passed, including the combined seasonal packet suite |
-| PacketEvents section adapter | Preserved block states, block/fluid counts, original biomes and all 1,536 mapped biome cells in two 24-section fixtures |
+The native-path checks cover:
 
-Wire clients verify received protocol data. They do not render Minecraft or reproduce its movement physics. These checks therefore do not certify walking, jumping, collision prediction or every anticheat check. Brief differences while a bounded season refresh is still being delivered are expected; settled states are the meaningful comparison.
+- Startup and seasonal presentation without standalone PacketEvents.
+- Grim's bundled copy with no standalone PacketEvents.
+- Standalone PacketEvents, both alone and with the full packet-plugin stack.
+- Concurrent joins with and without known-pack negotiation, ordinary library block updates, delayed writes and live palette reloads.
+- PacketEvents listener edits and cancellation, restoration afterward, and disconnect with a delayed write still queued. These retain their normal library behavior.
+- Accumulation, digging acknowledgment, break grace, melt, re-accumulation and visual retirement over a 160-column snow fixture. Physical air and stone remain unchanged.
+- Original block restoration, mixed leaf/stone section updates, unrelated buffers and configuration packet-ID collisions in the native packet regression suite.
 
-ViaVersion was loaded with native 26.3 clients. Older translated clients, proxies, Geyser and arbitrary packet-plugin combinations were not tested. BlueMap rendering, full terrain migrations and durability were not re-benchmarked in this transport experiment; their underlying code was not changed.
+The four-client full-stack run delivered the seasonal registry twice to each client, including a live palette reload. PacketEvents retained 67 real biomes in its shared cache and 2,881 entries in each player's seasonal registry. The reloaded grass color matched the wire data, and all four players reused the same projection for each palette. The standalone-only run confirmed the same cache separation and reload behavior. Retirement followed by disconnect cleared the tracked connections and cached projection.
 
-## Performance
+The final local build passed all standalone suites and native packet regressions, including 4,990 assertions in the combined seasonal packet suite. Gradle `check jar` also passed. The final full-stack listener-composition run passed against the packaged build.
 
-The registry-aware section adapter was compared with the existing codec using the same input and outputs, including capture of original biomes for later restoration. A warmed fixture contained 24 sections, mixed block palettes and biome borders. Four alternating rounds encoded 2,000 chunks per implementation.
+The wire clients validate received packets, not rendering or Minecraft movement physics. Real-client walking, jumping and collision behavior under Grim still need playtesting. ViaVersion is loaded with native 26.3 clients; older translated clients, proxies and Geyser are not certified.
 
-| Codec | Allocated per round | Thread CPU per round |
-| --- | --- | --- |
-| Existing codec | About 379 MiB | 109–125 ms |
-| PacketEvents section adapter | About 260–261 MiB | 156–219 ms |
+## Boundaries
 
-In this fixture the adapter allocated about 31% less memory but used more CPU. This measures only the section codec. It excludes networking, lighting, block entities and whole-server workload. It is not a TPS benchmark, and it does not justify enabling the section adapter by default. Short server tests also showed variable startup and join spikes; they are correctness checks, not evidence of a speedup.
+This supports ordinary PacketEvents use while preserving the native pipeline. It does not force True Seasons to win against every deliberate packet edit. Listeners that intentionally replace our environmental appearances can still override them. Silent or direct-context sends can bypass the native handler, as they did before; unrelated silent packets are left alone. Fake terrain, custom per-player registries and other competing environmental effects need individual compatibility work when encountered.
 
-PacketEvents does not remove tree selection, snow planning, migration or BlueMap work. The current bridge also adds packet decoding and encoding. A production port would need to avoid that conversion round trip before making performance claims.
+The metadata hook uses PacketEvents' registry support and is tested against 2.14.0. That integration needs checking when the library changes. It does not alter PacketEvents' global settings or attempt to manage another plugin's packet listeners.
 
-Keeping the library's registry view correct also adds per-player registry parsing and storage in this prototype. That cost needs measuring at realistic player counts; the section-codec allocation result does not account for it.
+The shared-cache check starts with a fresh server process. It deliberately leaves an existing shared entry untouched, so it does not repair a cache already contaminated by an earlier plugin instance. Restart the experimental server when changing implementations.
 
-## Trying the branch
+## Performance and status
 
-Use a separate server copy with Paper 26.3 and standalone PacketEvents 2.14.0. This branch declares PacketEvents as a required plugin. Grim's bundled copy does not satisfy that requirement. The experimental jar is named `TrueSeasons-0.3.5-packetevents.1.jar`.
+Normal native packets do not enter the compatibility codec. Unrelated encoded packets take only the packet-ID check. Only relevant encoded updates are decoded, and only changed updates are encoded again. The registry projection is shared and bounded to the current cached definition; there is no per-chunk metadata cache or additional world scan.
 
-The default selects PacketEvents transport and retains the current section codec. For controlled comparisons only:
+A warmed native-codec fixture measured approximately zero allocation per unrelated encoded packet, 120 bytes per unchanged single-block update and 408 bytes per repainted single-block update. These are codec-only allocation measurements over three rounds, using 2,000,000 unrelated packets and 100,000 updates per round. They exclude the seasonal algorithms, networking and server workload; they are not whole-server performance figures.
 
-- `-Dtrueseasons.packet-backend=native` selects the original transport. PacketEvents is still required by this branch's plugin declaration.
-- `-Dtrueseasons.packetevents-sections=true` enables the optional section adapter. Leave it off when measuring transport alone.
+This is a compatibility change, not a claimed TPS improvement. The first experiment's section-codec allocation figures do not apply to this implementation. Startup and full-server performance conclusions require representative profiling beyond these small fixtures.
 
-The local build script deliberately rejects automatic installation into the normal test server. There is no release tag or release asset for this experiment.
+The branch remains experimental. Main, the published release and the normal installed test server are unchanged. Use a separate Paper 26.3 server copy to try `TrueSeasons-0.3.5-packetevents.2.jar`; install standalone PacketEvents 2.14.0 only when testing that integration. Grim's bundled copy does not count as the standalone plugin.
 
-## Recommendation
-
-Keep this separate from the release branch for now. PacketEvents is promising for compatibility and packet maintenance; requiring it solely for better TPS or solely for Grim would not be supported by these results.
-
-Before adopting it, replace the conversion bridge with direct packet adapters, profile that implementation on a representative workload, and test real-client movement and digging under Grim. Expand the listener-composition and queued-disconnect checks to other packet types and plugin combinations. Also test native bundle delivery and translated clients if those are to be supported. Keep the existing restoration and world-preservation rules throughout that work.
-
-Upstream references: [PacketEvents 2.14.0](https://github.com/retrooper/packetevents/releases/tag/v2.14.0), [PacketEvents development setup](https://docs.packetevents.com/development-setup), [Grim source used for inspection](https://github.com/GrimAnticheat/Grim/tree/3bc895910193212efd92d5eea9995334efe22388).
+For controlled baseline comparisons, `-Dtrueseasons.disable-packet-compatibility=true` disables both compatibility pieces while retaining native seasonal handling. This is an experiment switch, not a normal server setting. The local build script blocks automatic installation into the normal test server.

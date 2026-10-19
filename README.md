@@ -1,6 +1,6 @@
 # True Seasons
 
-**Experimental PacketEvents branch.** This build requires PacketEvents 2.14.0 and is for isolated testing. It is not a published release. See the [experiment findings](docs/PACKETEVENTS_EXPERIMENT.md) for the comparison, tested plugin stack and remaining limits. The regular release below is unchanged.
+**Experimental PacketEvents branch.** This build tests optional compatibility with PacketEvents while keeping native packet handling. Use a separate server copy; this is not a published release. See the [experiment findings](docs/PACKETEVENTS_EXPERIMENT.md) for the comparison, tested plugin stack and remaining limits. The regular release below is unchanged.
 
 [![Latest prerelease: v0.3.5](https://img.shields.io/badge/prerelease-v0.3.5-blue)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v0.3.5)
 [![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)

@@ -21,7 +21,7 @@ $taskLibs = @(Get-ChildItem -LiteralPath (Join-Path $taskServer 'libraries') -Re
     ($_.Name -notlike 'paper-api-*' -or $_.Name -eq 'paper-api-26.3.build.177-stable.jar') -and $_.Name -notlike 'adventure-*-4.*.jar'
 } | ForEach-Object FullName)
 $taskLibs += @(Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'bluemap-*.jar' | ForEach-Object FullName)
-if(-not(Test-Path -LiteralPath $PacketEventsJar)){throw 'Supply the PacketEvents 2.14.0 plugin jar through -PacketEventsJar for this experiment'}
+if(-not(Test-Path -LiteralPath $PacketEventsJar)){throw 'Supply the PacketEvents 2.14.0 API jar with -PacketEventsJar to compile optional compatibility'}
 $taskLibs += (Resolve-Path -LiteralPath $PacketEventsJar).Path
 $taskClasspath = $taskLibs -join ';'
 function Write-JavaArgs([string]$Path, [string[]]$Values) {
@@ -53,9 +53,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Autumn leaf packet tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Snow presentation packet tests failed' }
 & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.SeasonalPresentationPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Combined seasonal presentation packet tests failed' }
-& (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.PacketEventsPaletteExperiment' '--verify'
-if ($LASTEXITCODE -ne 0) { throw 'PacketEvents registry palette tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.5-packetevents.1.jar'
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.5-packetevents.2.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
 Write-Output "Built and verified: $taskJar"

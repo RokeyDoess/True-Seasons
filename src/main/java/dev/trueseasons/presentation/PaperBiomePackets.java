@@ -15,7 +15,6 @@ import io.papermc.paper.connection.PlayerConfigurationConnection;
 
 /** Isolated, fail-fast adapter for Mojang-mapped Paper 26.3. No server registry or chunk is mutated. */
 public final class PaperBiomePackets {
-    private static final boolean PACKET_EVENTS_SECTIONS=Boolean.getBoolean("trueseasons.packetevents-sections");
     public static final int COLOR_BANKS=7+(SeasonColorFrame.PALETTE_STEPS-1)*5+1;
     public static int colorBank(SeasonColorFrame frame,boolean snowy){
         int step=frame.paletteStep();
@@ -61,6 +60,16 @@ public final class PaperBiomePackets {
     }
 
     public record RegistryResult(Object packet, int originalCount, List<String> biomeKeys, int registrySize) {}
+    Object materializedRegistry(Object packet) throws ReflectiveOperationException {
+        List<Object> entries=new ArrayList<>();
+        for(Object entry:(List<?>)call(packet,"entries")){
+            Object id=call(entry,"id"),data=((Optional<?>)call(entry,"data")).orElse(null);
+            if(data==null)data=authoritative.get(id.toString());
+            if(data==null)throw new IllegalStateException("Cannot materialize original biome "+id);
+            entries.add(entryConstructor.newInstance(id,Optional.of(data)));
+        }
+        return registryConstructor.newInstance(call(packet,"registry"),List.copyOf(entries));
+    }
     public RegistryResult registry(Object packet) throws ReflectiveOperationException {
         return registry(packet, null);
     }
@@ -188,9 +197,7 @@ public final class PaperBiomePackets {
     }
     public ChunkResult chunk(Object packet, int count, int registrySize, IntUnaryOperator mapping) throws ReflectiveOperationException {
         Object old = call(packet, "chunkData");
-        BiomeWireCodec.ChunkData mapped = PACKET_EVENTS_SECTIONS
-            ? PacketEventsSectionCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping)
-            : BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping);
+        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping);
         Object copy = chunkDataConstructor.newInstance(heightmaps.get(old), mapped.sections(), blockEntities.get(old));
         extraPackets.set(copy, extraPackets.get(old));
         chunkData.getMethod("setReady", boolean.class).invoke(copy, true);

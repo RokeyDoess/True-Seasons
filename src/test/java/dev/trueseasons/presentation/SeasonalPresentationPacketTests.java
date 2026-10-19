@@ -30,9 +30,71 @@ public final class SeasonalPresentationPacketTests {
         air=defaultId("AIR");stone=defaultId("STONE");snow=defaultId("SNOW");birch=defaultId("BIRCH_LEAVES");
         Object property=type("net.minecraft.world.level.block.state.properties.BlockStateProperties").getField("PERSISTENT").get(null);
         birch=id(registry.states[birch].getClass().getMethod("setValue",type("net.minecraft.world.level.block.state.properties.Property"),Comparable.class).invoke(registry.states[birch],property,true));
-        pipeline();respawnAndDisconnect();registryReload();alreadyVisibleWinterEntry();stormRevealBarrier();previewDigging();sharedSnowBudget();sharedLeafBudget();snowmelt();meltDigging();
+        pipeline();encodedCompatibility();respawnAndDisconnect();registryReload();alreadyVisibleWinterEntry();stormRevealBarrier();previewDigging();sharedSnowBudget();sharedLeafBudget();snowmelt();meltDigging();
         System.out.println("Seasonal presentation packet tests passed: "+checks+" assertions");
         type("org.apache.logging.log4j.LogManager").getMethod("shutdown").invoke(null);
+    }
+    private static void encodedCompatibility()throws Exception{
+        Object access=type("net.minecraft.core.RegistryAccess").getField("EMPTY").get(null);
+        var raw=new NativeRawBlockUpdates(access);
+        var owner=owners();publish(owner,0,0,plane(2));
+        var leafContext=new PaperLeafPackets.Context(42,0,16,true);
+        var snowContext=new PaperSnowPackets.Context(VERSION,64,0,16,owner);
+        var handler=handler(resolver(),Map.of("minecraft:overworld",leafContext),Map.of("minecraft:overworld",snowContext));
+        handler.rawUpdates(raw);
+        EmbeddedChannel channel=new EmbeddedChannel(handler);
+        try{
+            channel.writeOutbound(biomeRegistry());readAll(channel);
+            ByteBuf configCollision=encodedUpdate(raw,access,single(1,5,1,birch));configCollision.writerIndex(1);
+            channel.writeOutbound(configCollision);check(channel.readOutbound()==configCollision,"Initial configuration does not decode a colliding gameplay ID before the first login");configCollision.release();
+            handler.setPresentation(false,Season.AUTUMN,POLICY);
+            channel.writeOutbound(login("minecraft:overworld"));readAll(channel);
+            int[] original=planeSource(2);original[index(1,5,1)]=birch;original[index(2,5,1)]=birch;
+            channel.writeOutbound(chunk(sectionWire(original,new int[64]),0,0));int[] client=decode(channel.readOutbound());
+            ByteBuf source=encodedUpdate(raw,access,single(1,5,1,birch));byte[] unmodified=bytes(source);source.retain();
+            channel.writeOutbound(source);ByteBuf painted=channel.readOutbound();
+            check(source.refCnt()==1&&Arrays.equals(bytes(source),unmodified),"Encoded compatibility releases only its input reference and never edits a shared source buffer");source.release();
+            apply(client,List.of(decodedUpdate(raw,painted)),0,0,0);painted.release();
+            check(client[index(1,5,1)]!=birch,"Ordinary encoded birch updates retain their autumn appearance through the native handler");
+            int hidden=0;while(rank(hidden,0,0)<64)hidden++;
+            ByteBuf snowSource=encodedUpdate(raw,access,single(hidden&15,2,hidden>>4,snow));channel.writeOutbound(snowSource);
+            ByteBuf hiddenSnow=channel.readOutbound();apply(client,List.of(decodedUpdate(raw,hiddenSnow)),0,0,0);hiddenSnow.release();
+            check(client[index(hidden&15,2,hidden>>4)]==air,"Encoded updates cannot expose owned snow ahead of shared transition coverage");
+            ByteBuf batch=encodedUpdate(raw,access,batch(0,0,0,Map.of(index(1,5,1),birch,index(2,5,1),stone)));
+            channel.writeOutbound(batch);ByteBuf batchResult=channel.readOutbound();apply(client,List.of(decodedUpdate(raw,batchResult)),0,0,0);batchResult.release();
+            check(client[index(1,5,1)]!=birch&&client[index(2,5,1)]==stone,"Encoded section updates combine seasonal leaves with unrelated real block changes");
+            Object typed=single(2,5,1,stone);channel.writeOutbound(typed);Object typedResult=channel.readOutbound();
+            check(!(typedResult instanceof ByteBuf),"Normal native packets do not go through encoded compatibility");
+            var summer=new PaperLeafPackets.Context(42,0,16,false);
+            pumpLeaves(handler,channel,summer,client,0,0,0);
+            check(client[index(1,5,1)]==birch&&client[index(2,5,1)]==stone,"Season exit restores the latest encoded source and preserves replacements without double painting");
+            ByteBuf unrelated=Unpooled.buffer().writeByte(0xff).writeByte(0x7f).writeLong(1234);int reader=unrelated.readerIndex();
+            channel.writeOutbound(unrelated);check(channel.readOutbound()==unrelated&&unrelated.readerIndex()==reader&&unrelated.refCnt()==1,"Unrelated encoded packets pass through without copies, reader changes or reference loss");unrelated.release();
+            ByteBuf offset=Unpooled.buffer().writeInt(12);ByteBuf update=encodedUpdate(raw,access,single(1,5,1,birch));offset.writeBytes(update);update.release();offset.readerIndex(4);
+            int before=offset.readerIndex();raw.rewrite(offset,packet->packet);
+            check(offset.readerIndex()==before&&offset.refCnt()==1,"No-op decoding preserves offset readers and caller ownership");offset.release();
+            ByteBuf trailing=encodedUpdate(raw,access,single(1,5,1,birch));trailing.writeByte(1);
+            try{raw.rewrite(trailing,packet->packet);throw new AssertionError("Trailing selected payload accepted");}
+            catch(IllegalArgumentException expected){check(trailing.refCnt()==1&&trailing.readerIndex()==0,"Invalid selected payload leaves input ownership with its caller");}finally{trailing.release();}
+            Field configuring=handler.getClass().getDeclaredField("configuring");configuring.setAccessible(true);configuring.set(handler,true);
+            ByteBuf config=encodedUpdate(raw,access,single(1,5,1,birch));channel.writeOutbound(config);check(channel.readOutbound()==config,"Configuration traffic never interprets gameplay packet IDs");config.release();configuring.set(handler,false);
+            invoke(handler,"retire");readAll(channel);
+            ByteBuf retired=encodedUpdate(raw,access,single(1,5,1,birch));channel.writeOutbound(retired);check(channel.readOutbound()==retired,"Retired seasonal presentation stops rewriting encoded block updates");retired.release();
+        }finally{channel.finishAndReleaseAll();}
+    }
+    private static ByteBuf encodedUpdate(NativeRawBlockUpdates raw,Object access,Object packet)throws Exception{
+        Field table=NativeRawBlockUpdates.class.getDeclaredField("codecs");table.setAccessible(true);
+        Object stream=packet.getClass().getField("STREAM_CODEC").get(null);int packetId=-1;
+        Object[] codecs=(Object[])table.get(raw);
+        for(int id=0;id<codecs.length;id++)if(codecs[id]!=null&&field(codecs[id],"stream")==stream)packetId=id;
+        if(packetId<0)throw new AssertionError("Codec packet ID unavailable");
+        ByteBuf result=Unpooled.buffer();Object friendly=type("net.minecraft.network.RegistryFriendlyByteBuf").getConstructor(ByteBuf.class,type("net.minecraft.core.RegistryAccess")).newInstance(result,access);
+        type("net.minecraft.network.FriendlyByteBuf").getMethod("writeVarInt",int.class).invoke(friendly,packetId);
+        type("net.minecraft.network.codec.StreamCodec").getMethod("encode",Object.class,Object.class).invoke(stream,friendly,packet);return result;
+    }
+    private static Object decodedUpdate(NativeRawBlockUpdates raw,ByteBuf bytes)throws Exception{
+        Object[] result={null};check(raw.rewrite(bytes,packet->{result[0]=packet;return packet;})==bytes,"Inspection never changes a correctly encoded update buffer");
+        if(result[0]==null)throw new AssertionError("Encoded update was not decoded");return result[0];
     }
     private static void pipeline()throws Exception{
         var owner=owners();publish(owner,0,0,plane(2));

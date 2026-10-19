@@ -15,6 +15,7 @@ import io.papermc.paper.connection.PlayerConfigurationConnection;
 
 /** Isolated, fail-fast adapter for Mojang-mapped Paper 26.3. No server registry or chunk is mutated. */
 public final class PaperBiomePackets {
+    private static final boolean PACKET_EVENTS_SECTIONS=Boolean.getBoolean("trueseasons.packetevents-sections");
     public static final int COLOR_BANKS=7+(SeasonColorFrame.PALETTE_STEPS-1)*5+1;
     public static int colorBank(SeasonColorFrame frame,boolean snowy){
         int step=frame.paletteStep();
@@ -187,7 +188,9 @@ public final class PaperBiomePackets {
     }
     public ChunkResult chunk(Object packet, int count, int registrySize, IntUnaryOperator mapping) throws ReflectiveOperationException {
         Object old = call(packet, "chunkData");
-        BiomeWireCodec.ChunkData mapped = BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping);
+        BiomeWireCodec.ChunkData mapped = PACKET_EVENTS_SECTIONS
+            ? PacketEventsSectionCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping)
+            : BiomeWireCodec.chunk((byte[]) sectionBuffer.get(old), count, registrySize, mapping);
         Object copy = chunkDataConstructor.newInstance(heightmaps.get(old), mapped.sections(), blockEntities.get(old));
         extraPackets.set(copy, extraPackets.get(old));
         chunkData.getMethod("setReady", boolean.class).invoke(copy, true);

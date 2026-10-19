@@ -1,11 +1,12 @@
 name: TrueSeasons
-version: 0.3.5
+version: 0.3.5-packetevents.1
 main: dev.trueseasons.TrueSeasonsPlugin
 api-version: '26.3'
 description: Calendar seasons with seasonal colors and reversible winter snow.
 author: RokeyDoess
 website: https://github.com/RokeyDoess/True-Seasons
 softdepend: [BlueMap]
+depend: [packetevents]
 commands:
   trueseasons:
     description: True Seasons administration

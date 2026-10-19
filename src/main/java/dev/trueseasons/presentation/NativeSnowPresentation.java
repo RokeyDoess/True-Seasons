@@ -40,6 +40,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private final PaperBiomePackets packets;
     private final PaperLeafPackets leafPackets;
     private final PaperSnowPackets snowPackets;
+    private final PacketEventsBridge packetEvents;
     private final SnowOwnershipSnapshots snowOwnership;
     private final IntSupplier coverage;
     private final Supplier<String> version;
@@ -110,6 +111,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         this.breakDelay=Objects.requireNonNull(breakDelay);
         leafPackets = visuals.get() == null && snow==null ? null : new PaperLeafPackets();
         snowPackets = snow==null ? null : new PaperSnowPackets(leafPackets);
+        packetEvents = System.getProperty("trueseasons.packet-backend", "packetevents").equals("native") ? null : new PacketEventsBridge(plugin.getLogger());
         snowOwnership = snow==null ? null : new SnowOwnershipSnapshots(plugin,snow,this::snowChanged);
         if(snow!=null)snow.setMeltObserver(chunk->{
             if(closed||!snowMelting.test(chunk.getWorld()))return;
@@ -128,7 +130,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
         if (closed) return;
         try {
             Channel channel = packets.channel(event.getConnection());
-            if (channel.pipeline().get(HANDLER) instanceof ClimateHandler existing) {
+            ClimateHandler existing=packetEvents==null?(channel.pipeline().get(HANDLER) instanceof ClimateHandler found?found:null):packetEvents.handler(channel);
+            if (existing!=null) {
                 UUID id = event.getConnection().getProfile().getId();
                 viewers.put(id, new Viewer(channel, existing));
                 if (closed) { viewers.remove(id); channel.eventLoop().execute(() -> existing.retire()); }
@@ -136,7 +139,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             }
             UUID id = event.getConnection().getProfile().getId();
             ClimateHandler handler = new ClimateHandler(packets, plugin.getLogger(), climate.get(), visuals, leafPackets, () -> leafWorlds,snowPackets,()->snowWorlds,notice->previewBroken(id,notice),snowBudget,leafBudget);
-            channel.pipeline().addBefore("packet_handler", HANDLER, handler);
+            if(packetEvents==null)channel.pipeline().addBefore("packet_handler", HANDLER, handler);
+            else packetEvents.bind(channel,handler);
             viewers.put(id, new Viewer(channel, handler));
             if (closed) { viewers.remove(id); channel.eventLoop().execute(() -> handler.retire()); }
         } catch (ReflectiveOperationException | RuntimeException failure) {
@@ -316,7 +320,8 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
     private Viewer recoverViewer(Player player) {
         try {
             Channel channel = packets.channel(player.getConnection());
-            if (channel.isActive() && channel.pipeline().get(HANDLER) instanceof ClimateHandler handler && handler.canBind()) {
+            ClimateHandler handler=packetEvents==null?(channel.pipeline().get(HANDLER) instanceof ClimateHandler found?found:null):packetEvents.handler(channel);
+            if (channel.isActive() && handler!=null && handler.canBind()) {
                 Viewer recovered = new Viewer(channel, handler);
                 viewers.put(player.getUniqueId(), recovered);
                 return recovered;
@@ -350,6 +355,7 @@ public final class NativeSnowPresentation implements Listener, AutoCloseable {
             else viewer.channel.eventLoop().submit(restore).syncUninterruptibly();
         }
         viewers.clear(); warned.clear();
+        if(packetEvents!=null)packetEvents.retire();
         if(snowOwnership!=null)snowOwnership.close();
     }
 

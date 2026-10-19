@@ -1,9 +1,11 @@
 param(
     [string]$ServerDirectory = (Join-Path $PSScriptRoot '..\test server'),
     [string]$JdkDirectory = 'C:\Program Files\Java\jdk-25.0.4.1',
-    [switch]$Install
+    [switch]$Install,
+    [string]$PacketEventsJar = (Join-Path $PSScriptRoot 'run/packetevents-study/dependencies/packetevents-spigot-2.14.0.jar')
 )
 $ErrorActionPreference = 'Stop'
+if ($Install) { throw 'Experimental builds must be installed explicitly into a private test server.' }
 $taskServer = (Resolve-Path -LiteralPath $ServerDirectory).Path
 $taskBuild = Join-Path $PSScriptRoot 'build'
 $taskClasses = Join-Path $taskBuild 'classes'
@@ -19,6 +21,8 @@ $taskLibs = @(Get-ChildItem -LiteralPath (Join-Path $taskServer 'libraries') -Re
     ($_.Name -notlike 'paper-api-*' -or $_.Name -eq 'paper-api-26.3.build.177-stable.jar') -and $_.Name -notlike 'adventure-*-4.*.jar'
 } | ForEach-Object FullName)
 $taskLibs += @(Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'bluemap-*.jar' | ForEach-Object FullName)
+if(-not(Test-Path -LiteralPath $PacketEventsJar)){throw 'Supply the PacketEvents 2.14.0 plugin jar through -PacketEventsJar for this experiment'}
+$taskLibs += (Resolve-Path -LiteralPath $PacketEventsJar).Path
 $taskClasspath = $taskLibs -join ';'
 function Write-JavaArgs([string]$Path, [string[]]$Values) {
     $taskLines = $Values | ForEach-Object { '"' + $_.Replace('\','/').Replace('"','\"') + '"' }
@@ -49,13 +53,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Autumn leaf packet tests failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Snow presentation packet tests failed' }
 & (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.SeasonalPresentationPacketTests'
 if ($LASTEXITCODE -ne 0) { throw 'Combined seasonal presentation packet tests failed' }
-$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.5.jar'
+& (Join-Path $JdkDirectory 'bin/java.exe') "-Djava.io.tmpdir=$taskTestTemp" '-cp' "$taskTests;$taskClasses;$taskNms;$taskClasspath" 'dev.trueseasons.presentation.PacketEventsPaletteExperiment' '--verify'
+if ($LASTEXITCODE -ne 0) { throw 'PacketEvents registry palette tests failed' }
+$taskJar = Join-Path $taskBuild 'libs/TrueSeasons-0.3.5-packetevents.1.jar'
 & (Join-Path $JdkDirectory 'bin/jar.exe') '--create' '--file' $taskJar '-C' $taskClasses '.'
 if ($LASTEXITCODE -ne 0) { throw 'Jar packaging failed' }
-if ($Install) {
-    foreach ($taskOldJar in Get-ChildItem -LiteralPath (Join-Path $taskServer 'plugins') -Filter 'TrueSeasons-*.jar') {
-        if ($taskOldJar.Name -ne 'TrueSeasons-0.3.5.jar') { Move-Item -LiteralPath $taskOldJar.FullName -Destination "$($taskOldJar.FullName).disabled" -Force }
-    }
-    Copy-Item -LiteralPath $taskJar -Destination (Join-Path $taskServer 'plugins/TrueSeasons-0.3.5.jar') -Force
-}
 Write-Output "Built and verified: $taskJar"

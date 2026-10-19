@@ -1,16 +1,21 @@
 plugins { java }
 group = "dev.trueseasons"
-version = "0.3.5"
+version = "0.3.5-packetevents.1"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
     maven("https://repo.bluecolored.de/releases/")
+    maven("https://repo.codemc.io/repository/maven-releases/")
 }
 dependencies {
+    compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
+    testRuntimeOnly("com.github.retrooper:packetevents-spigot:2.14.0")
     compileOnly("io.papermc.paper:paper-api:26.3.build.177-stable")
     compileOnly("de.bluecolored:bluemap-api:2.7.7")
     compileOnly("io.netty:netty-transport:4.2.16.Final")
     compileOnly("io.netty:netty-buffer:4.2.16.Final")
+    testRuntimeOnly("io.netty:netty-transport:4.2.16.Final")
+    testRuntimeOnly("io.netty:netty-buffer:4.2.16.Final")
     compileOnly("it.unimi.dsi:fastutil:8.5.18")
     testRuntimeOnly("it.unimi.dsi:fastutil:8.5.18")
     testRuntimeOnly("io.papermc.paper:paper-api:26.3.build.177-stable")
@@ -27,6 +32,13 @@ tasks.register<JavaExec>("coreTest") {
     mainClass.set("dev.trueseasons.CoreTests")
 }
 tasks.check { dependsOn("coreTest") }
+tasks.register<JavaExec>("packetEventsPaletteTest") {
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("dev.trueseasons.presentation.PacketEventsPaletteExperiment")
+    args("--verify")
+}
+tasks.check { dependsOn("packetEventsPaletteTest") }
 // Regression suites are standalone Java entry points, registered with check below.
 tasks.test { enabled = false }
 listOf(

@@ -1,0 +1,46 @@
+enabled: true
+# One layer on EVERY sky-exposed surface that supports vanilla snow: roofs,
+# leaves, terrain, etc. Preserve existing snow, fluids and player replacements.
+# Eligible exposed ground cover is saved and temporarily removed below.
+surface-mode: all-exposed
+# Used only when surface-mode is explicitly set to whitelist.
+surface-materials: [GRASS_BLOCK, DIRT, COARSE_DIRT, PODZOL, MYCELIUM, ROOTED_DIRT, MOSS_BLOCK, STONE, ANDESITE, DIORITE, GRANITE, GRAVEL]
+# Biome names are matched against the Minecraft registry key.
+excluded-biome-fragments: []
+
+transition:
+  # Visible unfinished chunks preview snow up to the shared winter percentage.
+  # Finished regions reveal their snow gradually to players at that percentage.
+  # Snowy grass, podzol and mycelium sides follow that reveal without world edits.
+  # BlueMap shows saved snow; background migration stays region-by-region.
+  enabled: true
+  # Legacy physical accumulation settings; preview limits are under presentation.
+  columns-per-step: 8
+  step-ticks: 5
+snowmelt:
+  # Visible snow decreases with terrain restoration progress. Region work starts
+  # immediately; previews retain remaining snow over already-restored terrain.
+  enabled: true
+presentation:
+  # Shared by all players for extra snow preview/reveal and melt updates.
+  # Lower limits save work but visible snow takes longer to catch up. Raise with care.
+  # These do not change terrain migration, BlueMap, or normal chunk packets.
+  # Per-player limits still apply. Changes take effect on /ts reload.
+  # 1..1024 chunk visits per server tick.
+  max-chunks-per-tick: 64
+  # 1..131072 changed block states per server tick.
+  max-block-updates-per-tick: 8192
+ground-cover:
+  # Temporarily remove exposed grass, flowers and leaf litter during winter.
+  # Exact plants are restored on leaving winter if the destination/support is unchanged.
+  # Saplings, leaves and crops stay. Existing backups restore even when disabled.
+  enabled: true
+replenishment:
+  # Let players dig after breaking snow. Rain resumes ordinary random snowfall
+  # in that horizontal column after this grace period; expiry never forces a refill.
+  # Applies through clear weather, pauses and chunk unloads. 0 disables the grace.
+  player-break-cooldown-seconds: 60
+# Cancel vanilla accumulation onto owned snow, avoiding layers we cannot restore.
+# If disabled, natural melting releases snow ownership but keeps saved plants.
+# Player replacements remain intact.
+protect-owned-layers: true

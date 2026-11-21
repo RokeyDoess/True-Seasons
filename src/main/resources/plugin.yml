@@ -1,0 +1,29 @@
+name: TrueSeasons
+version: 1.0.0
+main: dev.trueseasons.TrueSeasonsPlugin
+api-version: '26.3'
+description: Calendar seasons with seasonal colors and reversible winter snow.
+author: RokeyDoess
+website: https://github.com/RokeyDoess/True-Seasons
+softdepend: [BlueMap]
+commands:
+  trueseasons:
+    description: True Seasons administration
+    aliases: [ts]
+    usage: /trueseasons info|status|reload|season|migration|cleanup
+permissions:
+  trueseasons.command.info:
+    default: true
+  trueseasons.command.admin:
+    default: op
+    children:
+      trueseasons.command.info: true
+      trueseasons.command.season: true
+      trueseasons.command.migration: true
+      trueseasons.command.cleanup: true
+  trueseasons.command.season:
+    default: op
+  trueseasons.command.migration:
+    default: op
+  trueseasons.command.cleanup:
+    default: op

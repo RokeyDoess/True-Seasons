@@ -1,0 +1,229 @@
+package dev.trueseasons.snow;
+
+import dev.trueseasons.config.Settings;
+import dev.trueseasons.presentation.PlayerChunkVisibility;
+import java.io.IOException;
+import java.util.*;
+import java.util.function.*;
+import org.bukkit.*;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.event.*;
+import org.bukkit.event.block.BlockFormEvent;
+import org.bukkit.plugin.java.JavaPlugin;
+import io.papermc.paper.event.packet.PlayerChunkLoadEvent;
+import io.papermc.paper.event.packet.PlayerChunkUnloadEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+
+/** Bounded read-only planning for visible unfinished terrain. Physical edits belong to the region pass. */
+public final class LocalWinterSnowService implements Listener, AutoCloseable {
+    @FunctionalInterface public interface PreviewSink {
+        void publish(UUID world,int x,int z,SnowOwnershipSnapshots.Preview preview);
+    }
+    private record Position(UUID world,int x,int z) {
+        // Keep cold record-method linking out of the preview work budget.
+        @Override public int hashCode(){return (31*Objects.hashCode(world)+x)*31+z;}
+        @Override public boolean equals(Object other){return other instanceof Position p&&x==p.x&&z==p.z&&Objects.equals(world,p.world);}
+    }
+    private static final int CHUNKS_PER_PLAYER=4096, MAX_SERVER_CHUNKS=65_536, INSPECTIONS_PER_TICK=64;
+    private static final long BUDGET_NANOS=1_000_000, REFRESH_NANOS=5_000_000_000L;
+    private static final int[] ALL_COLUMNS=new int[256];
+    static { for(int i=0;i<256;i++)ALL_COLUMNS[i]=i; }
+    private final SeasonalSnowService snow;
+    private final Supplier<Settings> settings;
+    private final Supplier<String> version;
+    private final Predicate<World> winterEnabled,active;
+    private final SnowReplenishmentService grace;
+    private final PreviewSink previews;
+    private final ToIntFunction<BlockData> stateId;
+    private final Map<Position,Long> checked=new HashMap<>();
+    private final PreviewPriorityQueue<Position> fresh=new PreviewPriorityQueue<>(MAX_SERVER_CHUNKS);
+    private List<Chunk> loaded=List.of();
+    private final Map<UUID,Set<Chunk>> viewers=new HashMap<>();
+    private final Map<Chunk,Integer> references=new LinkedHashMap<>();
+    private boolean visibilityDirty=true,reconcile=true;
+    private final Set<UUID> workingWorlds=new HashSet<>();
+    private final Set<UUID> transitionWorlds=new HashSet<>();
+    private boolean parked,activityDirty=true;
+    private Predicate<World> transitioning;
+    public void transitioning(Predicate<World> enabled){transitioning=Objects.requireNonNull(enabled);activityDirty=true;}
+    private void track(UUID viewer,Chunk chunk){
+        Set<Chunk> chunks=viewers.computeIfAbsent(viewer,k->new HashSet<>());
+        if(chunks.size()>=CHUNKS_PER_PLAYER||references.size()>=MAX_SERVER_CHUNKS&&!references.containsKey(chunk))return;
+        if(chunks.add(chunk)){references.merge(chunk,1,Integer::sum);visibilityDirty=true;}
+    }
+    private void untrack(UUID viewer,Chunk chunk){
+        Set<Chunk> chunks=viewers.get(viewer);if(chunks==null||!chunks.remove(chunk))return;
+        references.computeIfPresent(chunk,(key,count)->count==1?null:count-1);visibilityDirty=true;
+        if(chunks.isEmpty())viewers.remove(viewer);
+    }
+    private int cursor,ticks;
+    private int priorityTurns;
+    private int maximumChunks=CHUNKS_PER_PLAYER;
+    private String previousVersion;
+    private boolean closed;
+    private Predicate<World> melting=world->false;
+    private Supplier<String> meltOrder=()->"";
+    private Predicate<Chunk> previewMissing=chunk->false;
+    public void previewMissing(Predicate<Chunk> missing){previewMissing=missing;}
+    public void melting(Predicate<World> enabled,Supplier<String> order){melting=enabled;meltOrder=order;}
+    public void invalidate(){clear();previousVersion=version.get();}
+    public int pendingPreviews(){return fresh.size();}
+    public int checkedPreviews(){return checked.size();}
+
+    public LocalWinterSnowService(JavaPlugin plugin,SeasonalSnowService snow,Supplier<Settings> settings,
+            Supplier<String> version,Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,
+            SnowReplenishmentService grace,PreviewSink previews,ToIntFunction<BlockData> stateId) {
+        this(snow,settings,version,winterEnabled,active,coverage,grace,previews,stateId);
+        Bukkit.getPluginManager().registerEvents(this,plugin);
+    }
+    LocalWinterSnowService(SeasonalSnowService snow,Supplier<Settings> settings,Supplier<String> version,
+            Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,SnowReplenishmentService grace,
+            PreviewSink previews,ToIntFunction<BlockData> stateId) {
+        this.snow=snow;this.settings=settings;this.version=version;this.winterEnabled=winterEnabled;
+        this.active=active;this.transitioning=active;this.grace=grace;this.previews=previews;this.stateId=stateId;
+    }
+    LocalWinterSnowService(SeasonalSnowService snow,Supplier<Settings> settings,Supplier<String> version,
+            Predicate<World> winterEnabled,Predicate<World> active,IntSupplier coverage,SnowReplenishmentService grace,
+            Consumer<Chunk> beforeWrite,Consumer<Chunk> afterWrite) {
+        this(snow,settings,version,winterEnabled,active,coverage,grace,(world,x,z,preview)->{},data->0);
+    }
+    static boolean withinCoverage(int column,int x,int z,String version,int coverage) {
+        if(coverage<0||coverage>256)throw new IllegalArgumentException("Invalid local snow coverage");
+        return new SnowColumnOrder(x,z,version).rank(column)<coverage;
+    }
+    @EventHandler(priority=EventPriority.HIGHEST,ignoreCancelled=true)
+    public void capNaturalSnow(BlockFormEvent event) {
+        if(closed||event.getNewState().getType()!=Material.SNOW)return;
+        var block=event.getBlock();World world=block.getWorld();
+        if(!winterEnabled.test(world)||!world.isChunkLoaded(block.getX()>>4,block.getZ()>>4))return;
+        if(!snow.isComplete(block.getChunk(),version.get()))event.setCancelled(true);
+    }
+    boolean ready(Chunk chunk) {
+        return !closed&&chunk.isLoaded()&&active.test(chunk.getWorld())
+            &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get()))
+            &&(references.containsKey(chunk)||!chunk.getPlayersSeeingChunk().isEmpty());
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void visible(PlayerChunkLoadEvent event){
+        Chunk chunk=event.getChunk();
+        if(closed||!winterEnabled.test(chunk.getWorld())&&!melting.test(chunk.getWorld()))return;
+        if(!active.test(chunk.getWorld()))return;
+        var player=event.getPlayer();
+        resetVersion();if(workingWorlds.add(chunk.getWorld().getUID()))reconcile=true;
+        track(player.getUniqueId(),chunk);queueFresh(player.getUniqueId(),chunk,true,distance(player,chunk));
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void quit(PlayerQuitEvent event){
+        UUID id=event.getPlayer().getUniqueId();fresh.removeViewer(id);
+        Set<Chunk> chunks=viewers.get(id);if(chunks!=null)for(Chunk chunk:List.copyOf(chunks))untrack(id,chunk);
+    }
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void hidden(PlayerChunkUnloadEvent event){untrack(event.getPlayer().getUniqueId(),event.getChunk());}
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void completed(dev.trueseasons.api.SeasonChunkUpdatedEvent event){
+        Chunk chunk=event.getChunk();if(melting.test(chunk.getWorld())||!snow.isComplete(chunk,version.get()))return;
+        Position pos=position(chunk);if(checked.remove(pos)!=null)previews.publish(pos.world,pos.x,pos.z,null);
+    }
+    private void resetVersion(){String current=version.get();if(!Objects.equals(current,previousVersion)){clear();previousVersion=current;}}
+    private static int distance(org.bukkit.entity.Player player,Chunk chunk){
+        int x=org.bukkit.Location.locToBlock(player.getX())>>4,z=org.bukkit.Location.locToBlock(player.getZ())>>4;
+        return (int)Math.min(Integer.MAX_VALUE,Math.max(Math.abs((long)chunk.getX()-x),Math.abs((long)chunk.getZ()-z)));
+    }
+    private void queueFresh(UUID viewer,Chunk chunk,boolean arriving,int distance){
+        Position pos=position(chunk);
+        if(arriving&&previewMissing.test(chunk))checked.remove(pos);
+        Long last=checked.get(pos);
+        if((last==null||arriving&&System.nanoTime()-last>=REFRESH_NANOS)&&active.test(chunk.getWorld())
+                &&(melting.test(chunk.getWorld())||chunk.getWorld().hasStorm()&&!snow.isComplete(chunk,version.get())))fresh.offer(viewer,pos,distance);
+    }
+    public void tick() throws IOException {
+        if(closed)return;
+        ticks++;resetVersion();String current=version.get();
+        if(activityDirty||ticks==1||ticks%20==0){
+            activityDirty=false;Set<UUID> next=new HashSet<>(),transitions=new HashSet<>();
+            for(World world:Bukkit.getWorlds())if(transitioning.test(world)){
+                transitions.add(world.getUID());if(active.test(world))next.add(world.getUID());
+            }
+            if(!workingWorlds.equals(next)){workingWorlds.clear();workingWorlds.addAll(next);reconcile=true;}
+            if(!transitionWorlds.equals(transitions)){
+                transitionWorlds.clear();transitionWorlds.addAll(transitions);
+                for(var it=checked.keySet().iterator();it.hasNext();){var pos=it.next();if(!transitions.contains(pos.world)){previews.publish(pos.world,pos.x,pos.z,null);it.remove();}}
+            }
+        }
+        if(workingWorlds.isEmpty()){
+            if(!parked){loaded=List.of();viewers.clear();references.clear();fresh.clear();visibilityDirty=true;reconcile=true;parked=true;}
+            return;
+        }
+        if(parked){parked=false;reconcile=true;}
+        if(ticks%20==0)maximumChunks=(int)Math.min(MAX_SERVER_CHUNKS,Math.max(CHUNKS_PER_PLAYER,(long)Bukkit.getOnlinePlayers().size()*CHUNKS_PER_PLAYER));
+        if(reconcile||ticks%600==0) {
+            reconcile=false;viewers.clear();references.clear();visibilityDirty=true;
+            var players=new ArrayList<>(Bukkit.getOnlinePlayers());
+            maximumChunks=(int)Math.min(MAX_SERVER_CHUNKS,Math.max(CHUNKS_PER_PLAYER,(long)players.size()*CHUNKS_PER_PLAYER));
+            // Share the emergency cap fairly instead of always favoring the first connected players.
+            if(!players.isEmpty())Collections.rotate(players,(ticks/20)%players.size());
+            Set<Chunk> visible=new LinkedHashSet<>();
+            for(var player:players)if(workingWorlds.contains(player.getWorld().getUID()))
+                collectVisible(player,visible,maximumChunks,chunk->{track(player.getUniqueId(),chunk);queueFresh(player.getUniqueId(),chunk,false,distance(player,chunk));});
+        }
+        if(visibilityDirty){
+            visibilityDirty=false;loaded=List.copyOf(references.keySet());
+            Set<Position> keep=new HashSet<>();
+            for(Chunk chunk:loaded)if(melting.test(chunk.getWorld())||!snow.isComplete(chunk,current))keep.add(position(chunk));
+            fresh.retain(keep::contains);
+            for(var it=checked.keySet().iterator();it.hasNext();) {
+                Position old=it.next();if(!keep.contains(old)) { previews.publish(old.world,old.x,old.z,null);it.remove(); }
+            }
+        }
+        long deadline=System.nanoTime()+Math.min(BUDGET_NANOS,(long)(settings.get().millis*1_000_000));
+        for(int count=0;(!loaded.isEmpty()||!fresh.isEmpty())&&count<INSPECTIONS_PER_TICK&&System.nanoTime()<deadline;count++) {
+            Chunk chunk;
+            if(!fresh.isEmpty()&&(loaded.isEmpty()||(priorityTurns++&3)!=3)){
+                Position pos=fresh.poll();World world=Bukkit.getWorld(pos.world);
+                if(world==null||!world.isChunkLoaded(pos.x,pos.z))continue;
+                chunk=world.getChunkAt(pos.x,pos.z,false);
+            }else chunk=loaded.get(Math.floorMod(cursor++,loaded.size()));
+            if(!ready(chunk))continue;
+            Position pos=position(chunk);long now=System.nanoTime();
+            if(now-checked.getOrDefault(pos,now-REFRESH_NANOS)<REFRESH_NANOS)continue;
+            refresh(chunk,ALL_COLUMNS);
+        }
+    }
+    static void collectVisible(org.bukkit.entity.Player player,Set<Chunk> visible,int maximum){
+        collectVisible(player,visible,maximum,ignored->{});
+    }
+    static void collectVisible(org.bukkit.entity.Player player,Set<Chunk> visible,int maximum,Consumer<Chunk> observed){
+        World world=player.getWorld();
+        for(long key:PlayerChunkVisibility.sent(player)){
+            if(visible.size()>=maximum)break;
+            int x=(int)key,z=(int)(key>>32);
+            // getSentChunks itself resolves wrappers through getChunkAt. Inspect the
+            // sent keys first, so an unloading chunk cannot cause even a disk reload.
+            if(world.isChunkLoaded(x,z)){Chunk chunk=world.getChunkAt(x,z,false);visible.add(chunk);observed.accept(chunk);}
+        }
+    }
+    public void refresh(Chunk chunk,int[] columns) {
+        if(!ready(chunk))return;
+        Position pos=position(chunk);if(!checked.containsKey(pos)&&checked.size()>=maximumChunks)return;
+        Integer height=chunk.getWorld().getGameRuleValue(GameRules.MAX_SNOW_ACCUMULATION_HEIGHT);
+        long start=System.nanoTime();String current=version.get();
+        if(melting.test(chunk.getWorld())){
+            try{previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),snow.meltPreview(chunk,meltOrder.get(),stateId,true));checked.put(pos,start);}
+            catch(IOException failure){previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),null);checked.put(pos,start);}
+            return;
+        }
+        int[] available=grace==null?columns:grace.availableColumns(chunk,columns);
+        var candidates=height!=null&&height<=0?Map.<Integer,SnowOwnershipSnapshots.PreviewColumn>of():snow.previewColumns(chunk,available,stateId);
+        if(ready(chunk)&&current.equals(version.get())){
+            previews.publish(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ(),new SnowOwnershipSnapshots.Preview(current,start,candidates));
+            checked.put(pos,start);
+        }
+    }
+    /** Older live probes can invoke this method; local planning no longer places blocks. */
+    public SeasonalSnowService.Result accumulate(Chunk chunk,int[] columns) {
+        refresh(chunk,columns);return new SeasonalSnowService.Result(0,0,0,false);
+    }
+    private Position position(Chunk chunk){return new Position(chunk.getWorld().getUID(),chunk.getX(),chunk.getZ());}
+    private void clear(){for(Position pos:checked.keySet())previews.publish(pos.world,pos.x,pos.z,null);checked.clear();fresh.clear();loaded=List.of();viewers.clear();references.clear();visibilityDirty=true;reconcile=true;workingWorlds.clear();transitionWorlds.clear();activityDirty=true;parked=false;}
+    @Override public void close(){closed=true;clear();HandlerList.unregisterAll(this);}
+}

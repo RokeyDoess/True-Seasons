@@ -1,0 +1,325 @@
+package dev.trueseasons.visual;
+
+import java.util.*;
+import dev.trueseasons.visual.AutumnTreeColors.*;
+
+/** Original block fixtures; no Bukkit world, packet, chunk generation, or renderer dependency. */
+public final class AutumnTreeColorsTests {
+    private record Position(int x, int y, int z) {}
+    private static int checks;
+    private static void check(boolean condition, String message) {
+        checks++; if (!condition) throw new AssertionError(message);
+    }
+    private static final class World implements Sampler {
+        final Map<Position,Kind> blocks = new HashMap<>();
+        int reads;
+        Set<Integer> unavailableChunks = new HashSet<>();
+        @Override public Kind kindAt(int x, int y, int z) {
+            reads++;
+            return unavailableChunks.contains(Math.floorDiv(x,16)) ? Kind.UNKNOWN
+                    : blocks.getOrDefault(new Position(x,y,z), Kind.OTHER);
+        }
+        void set(int x,int y,int z,Kind kind) { blocks.put(new Position(x,y,z),kind); }
+        void tree(int x,int z, String species) {
+            for (int dx=-3; dx<=3; dx++) for(int dz=-3; dz<=3; dz++) for(int y=4;y<=6;y++)
+                if (Math.abs(dx)+Math.abs(dz)<=4) set(x+dx,y,z+dz,AutumnTreeColors.kind("minecraft:"+species+"_leaves"));
+            for(int y=0;y<=5;y++) set(x,y,z,AutumnTreeColors.kind("minecraft:"+species+"_log"));
+        }
+    }
+    public static void main(String[] args) throws Exception {
+        sharedPlans(); sharedPlanIsolation(); sharedAnchorDependencies(); sharedPublicationBound(); classification(); wholeTrees(); touchingCrowns(); decorative(); crossChunk(); branches(); bounded(); invalidation(); stages(); scratchReuse(); sampleCache();
+        System.out.println("Autumn tree colors: " + checks + " assertions passed");
+    }
+    private static void sharedPlans(){
+        World world=new World();world.tree(8,8,"oak");Object token=new Object();Object[] revision={token};
+        Sampler originals=new Sampler(){public Kind kindAt(int x,int y,int z){return world.kindAt(x,y,z);}public Object chunkRevision(int x,int z){return revision[0];}};
+        SharedPlans plans=new SharedPlans();Session first=new Session(42,originals,plans);
+        Appearance expected=first.appearanceAt(9,5,8,256);int coldReads=world.reads;
+        check(plans.size()==1,"Complete tree selections are shared across viewers");
+        world.reads=0;Session second=new Session(42,originals,plans);
+        check(second.appearanceAt(9,5,8,256)==expected&&world.reads<coldReads/4,"A second viewer reuses a verified tree plan");
+        world.reads=0;revision[0]=new Object();
+        check(new Session(42,originals,plans).appearanceAt(9,5,8,256)==expected&&world.reads>10,"Changed original chunk identities force a fresh search");
+        Object[] epoch={new Object()};
+        Sampler tracked=new Sampler(){
+            public Kind kindAt(int x,int y,int z){return world.kindAt(x,y,z);}
+            public Object chunkRevision(int x,int z){return revision[0];}
+            public Object revisionEpoch(){return epoch[0];}
+        };
+        plans.clear();Session producer=new Session(42,tracked,plans);
+        producer.appearanceAt(9,5,8);producer.appearanceAt(10,5,8);
+        Session consumer=new Session(42,tracked,plans);consumer.appearanceAt(9,5,8);
+        revision[0]=new Object();epoch[0]=new Object();world.reads=0;
+        check(consumer.appearanceAt(10,5,8)==expected&&world.reads>10,"A changed view epoch revalidates other leaves sharing a dependency snapshot");
+        Sampler absent=new Sampler(){public Kind kindAt(int x,int y,int z){return x==9&&y==5&&z==8?Kind.OAK_LEAVES:Kind.UNKNOWN;}};
+        Session incomplete=new Session(42,absent,plans);incomplete.appearanceAt(9,5,8,128);
+        check(incomplete.incomplete(),"Unavailable neighbors cannot use another viewer's complete plan");
+        for(int coverage=1;coverage<=256;coverage++)check(new Session(42,originals,plans).appearanceAt(9,5,8,coverage)==first.appearanceAt(9,5,8,coverage),"Shared plans preserve whole-tree timing");
+    }
+    private static void sharedPlanIsolation(){
+        World world=new World();Object[] tokens=new Object[256];int[] available={-1};
+        for(int x=0;x<tokens.length;x++){tokens[x]=new Object();world.tree(x*16+8,8,"oak");}
+        Sampler terrain=new Sampler(){
+            public Object chunkRevision(int x,int z){return z==0&&x>=0&&x<tokens.length&&(available[0]<0||available[0]==x)?tokens[x]:null;}
+            public Kind kindAt(int x,int y,int z){return chunkRevision(Math.floorDiv(x,16),Math.floorDiv(z,16))==null?Kind.UNKNOWN:world.kindAt(x,y,z);}
+        };
+        SharedPlans plans=new SharedPlans();Session producer=new Session(42,terrain,plans);Appearance expected=null;
+        for(int x=0;x<tokens.length;x++){
+            expected=producer.appearanceAt(x*16+9,5,8);
+            check(!producer.incomplete(),"Separated crowns resolve without unrelated chunks");
+        }
+        available[0]=255;world.reads=0;Session consumer=new Session(42,terrain,plans);
+        check(consumer.appearanceAt(255*16+9,5,8)==expected&&!consumer.incomplete(),"A late tree keeps its complete appearance in a smaller view");
+        check(world.reads<=1,"Unrelated earlier chunks do not prevent reusing a late tree plan");
+    }
+    private static void sharedAnchorDependencies(){
+        World world=new World();world.tree(15,8,"oak");Object[] tokens={new Object(),new Object()};boolean[] neighbor={true};
+        Sampler terrain=new Sampler(){
+            public Object chunkRevision(int x,int z){return z==0&&x>=0&&x<tokens.length&&(x==0||neighbor[0])?tokens[x]:null;}
+            public Kind kindAt(int x,int y,int z){return chunkRevision(Math.floorDiv(x,16),Math.floorDiv(z,16))==null?Kind.UNKNOWN:world.kindAt(x,y,z);}
+        };
+        SharedPlans plans=new SharedPlans();Session producer=new Session(57,terrain,plans);
+        producer.appearanceAt(14,5,8);producer.appearanceAt(13,5,8);
+        world.set(16,-1,8,Kind.OAK_LOG);tokens[1]=new Object();
+        Appearance expected=new Session(57,terrain).appearanceAt(13,5,8);world.reads=0;
+        check(new Session(57,terrain,plans).appearanceAt(13,5,8)==expected&&world.reads>10,
+                "A cached trunk retains neighboring terrain dependencies when another leaf reuses it");
+        neighbor[0]=false;world.reads=0;Session incomplete=new Session(57,terrain,plans);incomplete.appearanceAt(13,5,8);
+        check(incomplete.incomplete()&&world.reads>1,"An unavailable trunk neighbor cannot reuse a completed cross-chunk plan");
+    }
+    private static void sharedPublicationBound(){
+        Object[] tokens=new Object[512];for(int i=0;i<tokens.length;i++)tokens[i]=new Object();int[] reads={0};
+        Sampler forest=new Sampler(){
+            public Object chunkRevision(int x,int z){return z==0&&x>=0&&x<tokens.length?tokens[x]:null;}
+            public Kind kindAt(int x,int y,int z){
+                reads[0]++;if(chunkRevision(Math.floorDiv(x,16),Math.floorDiv(z,16))==null)return Kind.UNKNOWN;
+                int local=Math.floorMod(x,16);
+                if(local==8&&z==8&&y>=0&&y<=5)return Kind.OAK_LOG;
+                return local>=6&&local<=10&&z>=6&&z<=10&&y>=4&&y<=7?Kind.OAK_LEAVES:Kind.OTHER;
+            }
+        };
+        SharedPlans plans=new SharedPlans();Session producer=new Session(92,forest,plans);
+        Appearance first=producer.appearanceAt(6,4,6);
+        for(int chunk=0;chunk<tokens.length;chunk++)for(int leaf=0;leaf<100;leaf++){
+            int x=6+leaf%5,z=6+(leaf/5)%5,y=4+leaf/25;if(x==8&&z==8&&y<=5)continue;
+            producer.appearanceAt(chunk*16+x,y,z);
+            check(!producer.incomplete(),"Publication limits never truncate a complete tree search");
+        }
+        check(plans.size()<=8192,"One scan bounds shared-plan publication when its view exceeds cache capacity");
+        reads[0]=0;
+        check(producer.appearanceAt(6,4,6)==first&&reads[0]<=1,"Shared lookups continue after publication stops");
+        int previous=plans.size();producer.invalidate();Appearance last=producer.appearanceAt(511*16+6,4,6);
+        check(plans.size()>previous,"Original-terrain invalidation renews the publication budget");
+        reads[0]=0;
+        check(new Session(92,forest,plans).appearanceAt(511*16+6,4,6)==last&&reads[0]<=1,"A renewed session publishes complete reusable plans");
+    }
+    private static void classification() {
+        for (String species : List.of("oak","birch","jungle","acacia","dark_oak","mangrove","cherry")) {
+            check(AutumnTreeColors.kind("minecraft:"+species+"_leaves").leaves(), species+" leaves eligible");
+            check(AutumnTreeColors.kind("minecraft:"+species+"_log").log(), species+" logs eligible");
+            check(AutumnTreeColors.kind("minecraft:stripped_"+species+"_wood").log(), species+" stripped wood classified");
+        }
+        for (String name : List.of("spruce_leaves","birch_sapling","red_poplar_leaves","orange_poplar_leaves",
+                "yellow_poplar_leaves","pale_oak_leaves","azalea_leaves","flowering_azalea_leaves","oak_planks","mangrove_roots"))
+            check(AutumnTreeColors.kind("minecraft:"+name)==Kind.OTHER,name+" preserved");
+        check(AutumnTreeColors.kind("custom:oak_leaves")==Kind.OTHER,"custom leaves preserved");
+        check(AutumnTreeColors.kind(null)==Kind.UNKNOWN,"missing blocks remain unavailable");
+        check(Appearance.ORIGINAL.blockKey()==null,"original has no substitute");
+        check(Appearance.RED.blockKey().equals("minecraft:red_poplar_leaves"),"cherry target key");
+    }
+    private static void wholeTrees() {
+        for (String species : List.of("oak","birch","jungle","acacia","dark_oak","mangrove","cherry")) {
+            World world = new World(); world.tree(15,-17,species);
+            Session view = new Session(987654321,world);
+            Appearance expected=view.appearanceAt(16,5,-17);
+            check(expected!=Appearance.ORIGINAL,species+" paints");
+            for (var entry: world.blocks.entrySet()) if(entry.getValue().leaves()) {
+                Position p=entry.getKey();
+                check(view.appearanceAt(p.x,p.y,p.z)==expected,species+" entire crown uses trunk color");
+                check(new Session(987654321,world).appearanceAt(p.x,p.y,p.z)==expected,species+" restart/order stability");
+            }
+            if(species.equals("cherry")) check(expected==Appearance.RED,"cherry strictly red");
+            check(world.reads < 100000, species+" reads bounded even across independent sessions");
+        }
+        Set<Appearance> variants=EnumSet.noneOf(Appearance.class);
+        for(int i=0;i<40;i++) {
+            World world=new World(); world.tree(i*12,0,"birch");
+            variants.add(new Session(123,world).appearanceAt(i*12+1,5,0));
+        }
+        check(variants.equals(EnumSet.of(Appearance.YELLOW,Appearance.ORANGE,Appearance.RED)),"one species has all three colors");
+        Set<Appearance> seeded=EnumSet.noneOf(Appearance.class);
+        World world=new World();world.tree(0,0,"oak");
+        for(int i=0;i<40;i++) seeded.add(new Session(i,world).appearanceAt(1,5,0));
+        check(seeded.size()==3,"world seed contributes stable variation");
+    }
+    private static void touchingCrowns() {
+        World world=new World();world.tree(0,0,"oak");world.tree(6,0,"oak");
+        Session forward=new Session(20,world),reverse=new Session(20,world);
+        Appearance left=forward.appearanceAt(1,5,0),right=forward.appearanceAt(5,5,0);
+        check(left!=Appearance.ORIGINAL && right!=Appearance.ORIGINAL,"touching crowns resolve both trunks");
+        for(int x=-2;x<=2;x++) if(x!=0) check(forward.appearanceAt(x,5,0)==left,"left crown stays with its trunk");
+        for(int x=4;x<=8;x++) if(x!=6) check(forward.appearanceAt(x,5,0)==right,"right crown stays with its trunk");
+        Appearance center=forward.appearanceAt(3,5,0);
+        for(int x=8;x>=-2;x--) if(x!=0 && x!=6) reverse.appearanceAt(x,5,0);
+        check(reverse.appearanceAt(3,5,0)==center,"canopy tie independent of visitation order");
+        // Different species never claim one another's logs.
+        World mixed=new World();mixed.tree(0,0,"oak");mixed.tree(6,0,"birch");
+        check(new Session(20,mixed).appearanceAt(1,5,0)==left,"nearby birch cannot anchor oak");
+        World interrupted=new World();interrupted.set(0,5,0,Kind.OAK_LOG);interrupted.set(1,5,0,Kind.BIRCH_LEAVES);interrupted.set(2,5,0,Kind.OAK_LEAVES);
+        World reference=new World();reference.set(0,5,0,Kind.OAK_LOG);reference.set(1,5,0,Kind.OAK_LEAVES);
+        check(new Session(20,interrupted).appearanceAt(2,5,0)==new Session(20,reference).appearanceAt(1,5,0),"mixed intersecting leaves do not break matching trunk path");
+    }
+    private static void decorative(){
+        World floating=new World();floating.set(3,5,3,Kind.BIRCH_LEAVES);
+        Appearance expected=new Session(99,floating).appearanceAt(3,5,3);
+        check(expected==Appearance.ORANGE,"trunkless leaves use orange");
+        Sampler persistent=new Sampler(){public Kind kindAt(int x,int y,int z){return Kind.BIRCH_LEAVES;}public boolean persistentAt(int x,int y,int z){return true;}};
+        Session hedge=new Session(99,persistent);
+        for(int x=-100;x<100;x++)check(hedge.appearanceAt(x,20,-1)==expected,"persistent hedge coherent without neighbors or trunk");
+        for(Species species:Species.values())for(long seed:new long[]{0,1,99,Long.MIN_VALUE,Long.MAX_VALUE}){
+            int[] reads={0};
+            Sampler placed=new Sampler(){
+                public Kind kindAt(int x,int y,int z){reads[0]++;return AutumnTreeColors.kind("minecraft:"+species.name().toLowerCase(Locale.ROOT)+"_leaves");}
+                public boolean persistentAt(int x,int y,int z){return true;}
+            };
+            check(new Session(seed,placed).appearanceAt(-100,200,100)==(species==Species.CHERRY?Appearance.RED:Appearance.ORANGE),"decorative color independent of seed, species and coordinates: "+species);
+            check(reads[0]==1,"decorative foliage never searches for a trunk");
+        }
+    }
+    private static void crossChunk() {
+        World world=new World();world.tree(15,0,"birch");
+        Session complete=new Session(2,world);
+        Appearance expected=complete.appearanceAt(14,5,0);
+        check(complete.appearanceAt(16,5,0)==expected,"crosschunk canopy shares trunk anchor");
+        world.unavailableChunks.add(1);
+        Session partial=new Session(2,world);
+        check(partial.appearanceAt(14,5,0)==Appearance.ORANGE&&partial.incomplete(),"missing trunk halo uses a temporary orange fallback");
+        world.unavailableChunks.clear();
+        check(partial.appearanceAt(14,5,0)==expected,"unknown not cached permanently");
+        check(!partial.incomplete(),"resolved fallback clears incomplete marker");
+        World negative=new World();negative.tree(-16,0,"oak");
+        Session negatives=new Session(88,negative);
+        check(negatives.appearanceAt(-17,5,0)==negatives.appearanceAt(-15,5,0),"negative chunk boundary stable");
+    }
+    private static void branches() {
+        World world=new World();world.tree(0,0,"acacia");
+        world.set(1,6,0,Kind.ACACIA_LOG);world.set(2,7,0,Kind.ACACIA_LOG);
+        world.set(3,7,0,Kind.ACACIA_LEAVES);
+        Session view=new Session(3,world);
+        check(view.appearanceAt(-1,5,0)==view.appearanceAt(3,7,0),"diagonal acacia branch resolves same trunk");
+        World giant=new World();
+        for(int y=0;y<100;y++) for(int x=0;x<2;x++) for(int z=0;z<2;z++)giant.set(x,y,z,Kind.JUNGLE_LOG);
+        giant.set(-1,98,0,Kind.JUNGLE_LEAVES);giant.set(2,98,1,Kind.JUNGLE_LEAVES);
+        Session large=new Session(30,giant);
+        check(large.appearanceAt(-1,98,0)!=Appearance.ORIGINAL,"large jungle trunk fits budget");
+        check(large.appearanceAt(-1,98,0)==large.appearanceAt(2,98,1),"two by two tall trunk stable");
+    }
+    private static void bounded() {
+        World world=new World();world.tree(0,0,"oak");Session session=new Session(1,world);
+        for(var entry:world.blocks.entrySet()) if(entry.getValue().leaves()) {Position p=entry.getKey();session.appearanceAt(p.x,p.y,p.z);}
+        check(world.reads<1000,"sample cache amortizes complete canopy traversal");
+        int before=world.reads;
+        for(var entry:world.blocks.entrySet()) if(entry.getValue().leaves()) {Position p=entry.getKey();session.appearanceAt(p.x,p.y,p.z);}
+        check(world.reads==before,"repeat canopy lookup has zero sampler reads");
+        World huge=new World();
+        huge.set(0,0,0,Kind.OAK_LEAVES);
+        for(int x=1;x<4000;x++)huge.set(x,0,0,Kind.OAK_LOG);
+        huge.set(1,1,0,Kind.OAK_LEAVES);
+        Session oversized=new Session(1,huge);
+        check(oversized.appearanceAt(0,0,0)==Appearance.ORANGE&&oversized.incomplete(),"oversized log network uses orange within search limits");
+        check(huge.reads<=AutumnTreeColors.MAX_SEARCH_READS+1,"adversarial log network bounded reads");
+        check(oversized.appearanceAt(1,1,0)==Appearance.ORANGE&&oversized.incomplete(),"nearby crown shares oversized-component fallback");
+        huge.blocks.clear();huge.tree(0,0,"oak");oversized.invalidate();
+        Appearance repaired=oversized.appearanceAt(1,5,0);
+        check(!oversized.incomplete()&&repaired==new Session(1,huge).appearanceAt(1,5,0),"invalidation discards oversized-component markers after real tree edits");
+        World floating=new World();for(int x=-10;x<=10;x++)for(int y=-10;y<=10;y++)for(int z=-10;z<=10;z++)floating.set(x,y,z,Kind.OAK_LEAVES);
+        check(new Session(1,floating).appearanceAt(0,0,0)!=Appearance.ORIGINAL,"trunkless leaf mass receives stable decorative fallback");
+        check(floating.reads<=AutumnTreeColors.MAX_LEAF_SEARCH+1,"unsupported leaf mass bounded reads");
+    }
+    private static void invalidation() {
+        World world=new World();world.tree(0,0,"oak");Session view=new Session(5,world);
+        check(view.appearanceAt(1,5,0)!=Appearance.ORIGINAL,"initial tree colored");
+        world.blocks.replaceAll((position,kind)->kind.log()?Kind.OTHER:kind);view.invalidate();
+        check(view.appearanceAt(1,5,0)!=Appearance.ORIGINAL,"trunkless surviving leaves remain seasonal after invalidation");
+        world.set(100,100,100,Kind.CHERRY_LEAVES);
+        check(view.appearanceAt(100,100,100)==Appearance.RED,"cherry hardcoded red including standalone leaves");
+    }
+    private static void stages(){
+        Set<Integer> changes=new HashSet<>();
+        for(String species:List.of("oak","birch","cherry"))for(int tree=0;tree<4;tree++){
+            World world=new World();world.tree(tree*16,0,species);Session view=new Session(20,world);
+            int threshold=1;
+            while(view.appearanceAt(tree*16+1,5,0,threshold)==Appearance.ORIGINAL)threshold++;
+            changes.add(threshold);Appearance finalColor=view.appearanceAt(tree*16+1,5,0);
+            for(var row:world.blocks.entrySet())if(row.getValue().leaves()){
+                Position p=row.getKey();
+                check(view.appearanceAt(p.x,p.y,p.z,threshold-1)==Appearance.ORIGINAL,"Whole tree remains original before its stable threshold");
+                check(view.appearanceAt(p.x,p.y,p.z,threshold)==finalColor,"Whole tree changes together at its stable threshold");
+            }
+            int before=world.reads;view.appearanceAt(tree*16+1,5,0,threshold-1);view.appearanceAt(tree*16+1,5,0,threshold);
+            check(world.reads==before,"Changing coverage reuses cached tree selection");
+            check(new Session(20,world).appearanceAt(tree*16+1,5,0,threshold)==finalColor,"Tree timing and color survive a new session");
+        }
+        check(changes.size()>2,"Different trees change at different times");
+    }
+    private static void scratchReuse() throws Exception {
+        World world=new World();for(int i=0;i<8;i++)world.tree(i*32-112,i*32-112,i%2==0?"oak":"birch");
+        Session shared=new Session(123,world);Random random=new Random(6271);
+        List<Position> leaves=world.blocks.entrySet().stream().filter(row->row.getValue().leaves()).map(Map.Entry::getKey).toList();
+        for(int query=0;query<160;query++){
+            Position leaf=leaves.get(random.nextInt(leaves.size()));int coverage=random.nextInt(257);
+            Session independent=new Session(123,world);
+            check(shared.appearanceAt(leaf.x,leaf.y,leaf.z,coverage)==independent.appearanceAt(leaf.x,leaf.y,leaf.z,coverage),"Reused traversal scratch preserves independent autumn decisions");
+        }
+        var epoch=Session.class.getDeclaredField("leafEpoch");epoch.setAccessible(true);epoch.setInt(shared,-1);shared.invalidate();
+        Position leaf=leaves.getFirst();
+        check(shared.appearanceAt(leaf.x,leaf.y,leaf.z)==new Session(123,world).appearanceAt(leaf.x,leaf.y,leaf.z),"Epoch wrap clears stamps without changing tree resolution");
+        world.unavailableChunks.add(Math.floorDiv(leaf.x,16));shared.invalidate();
+        check(shared.appearanceAt(leaf.x,leaf.y,leaf.z)==Appearance.ORIGINAL,"Reused scratch does not invent a source leaf in unavailable terrain");
+        world.unavailableChunks.clear();shared.invalidate();
+        check(shared.appearanceAt(leaf.x,leaf.y,leaf.z)==new Session(123,world).appearanceAt(leaf.x,leaf.y,leaf.z),"Invalidation still recovers after terrain returns");
+    }
+    private static void sampleCache() throws Exception {
+        int[] reads={0};
+        Session cache=new Session(1,(x,y,z)->{reads[0]++;return Kind.OTHER;});
+        for(int x=0;x<20000;x++)cache.appearanceAt(x,80,0);
+        var field=Session.class.getDeclaredField("samples");field.setAccessible(true);
+        Object samples=field.get(cache);var size=samples.getClass().getDeclaredMethod("size");size.setAccessible(true);
+        int retained=(int)size.invoke(samples);
+        check(retained>8192&&retained<=16384,"Sampling cache remains useful and bounded after long travel");
+        int before=reads[0];cache.appearanceAt(19999,80,0);
+        check(reads[0]==before,"Most recently sampled original terrain is reused");
+        for(int x=0;x<20000;x++)cache.appearanceAt(x,80,0);
+        check(reads[0]>before,"Old samples are evicted rather than growing the cache");
+        before=reads[0];
+        cache.invalidate();cache.appearanceAt(19999,80,0);
+        check(reads[0]==before+1,"Invalidation discards cached original terrain");
+        Session zero=new Session(1,(x,y,z)->x==0&&y==0&&z==0?Kind.CHERRY_LEAVES:Kind.OTHER);
+        check(zero.appearanceAt(0,0,0)==Appearance.RED,"Zero-valued packed coordinates remain usable");
+        for(int[] point:new int[][]{{1,80,1},{-33_554_432,-2048,-33_554_432},{33_554_431,2047,33_554_431}}){
+            Session bounds=new Session(1,(x,y,z)->x==point[0]&&y==point[1]&&z==point[2]?Kind.CHERRY_LEAVES:Kind.OTHER);
+            check(bounds.appearanceAt(point[0],point[1],point[2])==Appearance.RED,"Native coordinate boundaries retain their exact originals");
+            for(int axis=0;axis<3;axis++){
+                int[] different=point.clone();different[axis]+=axis==1?4096:67_108_864;
+                check(bounds.appearanceAt(different[0],different[1],different[2])==Appearance.ORIGINAL,"Coordinates outside the native range cannot alias a cached block");
+            }
+        }
+        Session extended=new Session(1,(x,y,z)->x==Integer.MAX_VALUE-10&&y==5000&&z==Integer.MIN_VALUE+10?Kind.CHERRY_LEAVES:Kind.OTHER);
+        check(extended.appearanceAt(Integer.MAX_VALUE-10,5000,Integer.MIN_VALUE+10)==Appearance.RED,"Unpackable coordinates still resolve through the original sampler");
+        int[] attempts={0};Session arrivals=new Session(1,(x,y,z)->++attempts[0]==1?Kind.UNKNOWN:Kind.CHERRY_LEAVES);
+        check(arrivals.appearanceAt(0,0,0)==Appearance.ORIGINAL,"Unavailable originals remain unavailable");
+        check(arrivals.appearanceAt(0,0,0)==Appearance.RED&&attempts[0]==2,"An unavailable sample is retried without invalidation");
+        arrivals.appearanceAt(0,0,0);check(attempts[0]==2,"A subsequently available original can be cached");
+        Session scattered=new Session(42,(x,y,z)->(Integer.rotateLeft(x,13)^z^Integer.rotateLeft(y,7))%16==0?Kind.CHERRY_LEAVES:Kind.OTHER);
+        for(int pass=0;pass<3;pass++){
+            if(pass==2)scattered.invalidate();
+            Random positions=new Random(7183);
+            for(int point=0;point<24000;point++){
+                int x=positions.nextInt(-30_000_000,30_000_001),y=positions.nextInt(-64,320),z=positions.nextInt(-30_000_000,30_000_001);
+                boolean cherry=(Integer.rotateLeft(x,13)^z^Integer.rotateLeft(y,7))%16==0;
+                check(scattered.appearanceAt(x,y,z)==(cherry?Appearance.RED:Appearance.ORIGINAL),"Cache growth, collisions and invalidation retain exact original samples");
+            }
+            check((int)size.invoke(field.get(scattered))<=16384,"Widely scattered terrain never exceeds the sample limit");
+        }
+    }
+}

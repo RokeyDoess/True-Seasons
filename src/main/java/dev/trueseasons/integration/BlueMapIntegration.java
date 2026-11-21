@@ -1,0 +1,751 @@
+package dev.trueseasons.integration;
+
+import com.flowpowered.math.vector.Vector2i;
+import de.bluecolored.bluemap.api.*;
+import dev.trueseasons.config.Settings;
+import dev.trueseasons.visual.SeasonalVisualState;
+import dev.trueseasons.integration.RenderLedger.*;
+import dev.trueseasons.state.TrackedCollections;
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
+import org.bukkit.*;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.*;
+import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.java.JavaPlugin;
+
+/** Final revisions are retired only after saved-chunk proof and a receipt from every map. */
+public final class BlueMapIntegration implements IntegrationAdapter, Listener {
+    private record Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed, boolean verifyMarker, List<Revision> regionMembers) {
+        Probe(Revision revision, Path folder, boolean purge, boolean absenceAllowed, boolean verifyMarker) { this(revision, folder, purge, absenceAllowed, verifyMarker, List.of()); }
+    }
+    private record Proof(Revision revision, boolean purge, boolean absent, String error, boolean observationOnly, List<Revision> regionMembers, Path source) {}
+    private record DeletionBatch(Region region, ArrayDeque<Revision> remaining, Path source) {}
+    private record Purge(String token, boolean cleanup) {}
+    private record Flight(BlueMapRenderBridge.Ticket ticket, List<Revision> revisions, String palette, List<Vector2i> regions) {}
+    private final JavaPlugin plugin;
+    private final Supplier<Settings> settings;
+    private final Path file;
+    private final DurableRenderJournal journal;
+    private final BlueMapVisualQueue visualQueue;
+    private Supplier<SeasonalVisualState> visualSource = () -> null;
+    private final Map<String, BlueMapSeasonalColors> colors = new HashMap<>();
+    private final Map<String, Object> colorMaps = new HashMap<>();
+    private final Map<String, Object> unsupportedColorMaps = new HashMap<>();
+    private final Set<String> unavailableColors = new HashSet<>();
+    private final Map<String, UUID> knownVisualMaps = new LinkedHashMap<>();
+    private boolean visualMapsConfirmed;
+    private String colorFailure;
+    private SeasonalVisualState lastVisualState;
+    private long lastColorRefresh;
+    private boolean colorTargetsStale;
+    private final Set<ChunkKey> checkpointDirty = new LinkedHashSet<>(), durabilityRequired = new LinkedHashSet<>();
+    private final ExecutorService persistence = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "TrueSeasons-render-journal"); thread.setDaemon(true); return thread;
+    });
+    private final NamespacedKey revisionKey, seasonKey;
+    private final RenderLedger ledger = new RenderLedger();
+    private final FinalRevisionDurability finalDurability = new FinalRevisionDurability();
+    private final RegionRenderGate regionGate = new RegionRenderGate();
+    private RegionReadiness regionReadiness = (world, x, z) -> true;
+    private final Map<Region, RegionRenderGate.State> regionWaits = new HashMap<>();
+    private final Map<ChunkKey, String> readable = ledger.readable();
+    private final Map<ChunkKey, Path> folders = ledger.folders();
+    private final Set<ChunkKey> restored = ledger.restored(), deleted = ledger.deletions();
+    private final Map<ChunkKey, String> proofErrors = new HashMap<>();
+    private final ArrayDeque<DeletionBatch> deletionBatches = new ArrayDeque<>();
+    private final Set<Region> deletionStaging = new HashSet<>();
+    private int cleanupPurges;
+    private PurgeWorkQueue<Purge> purgeQueue;
+    private final Map<ChunkKey,Purge> trackedPurges=purgeIndex();
+    private final Map<ChunkKey, Purge> purges = trackedPurges;
+    private Map<ChunkKey,Purge> purgeIndex(){
+        purgeQueue=new PurgeWorkQueue<>();
+        return TrackedCollections.map(purgeQueue,(key,before,after)->{
+            boolean wasCleanup=before!=null&&before.cleanup,isCleanup=after!=null&&after.cleanup;
+            cleanupPurges+=(isCleanup?1:0)-(wasCleanup?1:0);ledger.purgeChanged(key,wasCleanup,isCleanup);
+        },()->true);
+    }
+    private void bindPurgeIndex(){ledger.cleanupPurges(key->{Purge purge=purges.get(key);return purge!=null&&purge.cleanup;});}
+    private PurgeWorkQueue<Purge> purgeWork(){return purges==trackedPurges?purgeQueue:null;}
+    private void purgeAwaiting(ChunkKey key){var queue=purgeWork();if(queue!=null)queue.awaiting(key);}
+    private void retryPurge(ChunkKey key){var queue=purgeWork();if(queue!=null&&!purgeLoaded.contains(key)&&!loading.contains(key))queue.retry(key);}
+    private final Set<ChunkKey> purgeLoaded = new HashSet<>(), loading = new HashSet<>();
+    private final Map<String, Flight> flights = new HashMap<>();
+    private final ExecutorService reader = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "TrueSeasons-saved-chunks"); thread.setDaemon(true); return thread;
+    });
+    private CompletableFuture<List<Proof>> checking;
+    private CompletableFuture<Boolean> compacting;
+    private RenderManager manager;
+    private BlueMapRenderBridge bridge;
+    private long lastFlush, lastRenderAttempt, lastProbe, lastCompact, lastRetire, lastWorldRefresh, lastStatus, lastFlightInspection;
+    private long regionRendersScheduled;
+    private final Map<UUID, BlueMapWorld> mappedWorlds = new LinkedHashMap<>();
+    private final Map<UUID,Path> mappedFolders=new HashMap<>();
+    private BlueMapAPI mappedApi;
+    private int purgeCursor,regionProbeCursor;
+    private boolean closed;
+    private String detail = "waiting for BlueMap";
+    private String brief="waiting for BlueMap";
+    private int displayPendingRegions=-1;
+    private String lastFailure;
+    public BlueMapIntegration(JavaPlugin plugin, Supplier<Settings> settings) throws Exception {
+        this.plugin = plugin; this.settings = settings;
+        bindPurgeIndex();
+        revisionKey = new NamespacedKey(plugin, "bluemap_revision"); seasonKey = new NamespacedKey(plugin, "season_version");
+        file = plugin.getDataFolder().toPath().resolve("state/bluemap.yml");
+        journal = new DurableRenderJournal(file.getParent());
+        visualQueue = new BlueMapVisualQueue(file.getParent().resolve("palettes"));
+        boolean journalAuthority = journal.contains("__format") || journal.hasSnapshot();
+        if (Files.exists(file) && !journalAuthority) {
+            YamlConfiguration data = new YamlConfiguration(); data.load(file.toFile());
+            if (data.getInt("schema") == 1) {
+                for (String value : data.getStringList("regions")) {
+                    String[] fields = value.split(",");
+                    ledger.restore(new ChunkKey(UUID.fromString(fields[0]), Integer.parseInt(fields[1]) * 32,
+                            Integer.parseInt(fields[2]) * 32), "legacy", List.of());
+                }
+            } else if (data.getInt("schema") == 3) {
+                for (Map<?, ?> row : data.getMapList("chunks")) {
+                    ChunkKey key = rowKey(row); List<String> maps = new ArrayList<>();
+                    if (row.get("acknowledged") instanceof Collection<?> values) values.forEach(v -> maps.add(v.toString()));
+                    String token = Objects.toString(row.get("revision"), "");
+                    ledger.restore(key, token, maps); ledger.cleanup(key, Boolean.TRUE.equals(row.get("cleanup")));
+                    if (Boolean.TRUE.equals(row.get("saved"))) readable.put(key, token);
+                    if (row.get("folder") != null) folders.put(key, Path.of(row.get("folder").toString()));
+                }
+                for (Map<?, ?> row : data.getMapList("purges")) {
+                    ChunkKey key = rowKey(row);
+                    purges.put(key, new Purge(row.get("revision").toString(), Boolean.TRUE.equals(row.get("cleanup"))));
+                    if (row.get("folder") != null) folders.put(key, Path.of(row.get("folder").toString()));
+                }
+            } else throw new IOException("Unknown BlueMap queue schema");
+        }
+        if (journalAuthority) {
+            restoreJournal();
+        } else {
+            Map<String, byte[]> migration = new LinkedHashMap<>();
+            Set<ChunkKey> keys = new LinkedHashSet<>(ledger.entries().keySet()); keys.addAll(purges.keySet());
+            for (ChunkKey key : keys) migration.put(journalKey(key), encode(key));
+            migration.put("__format", new byte[]{1}); journal.putAll(migration, true);
+        }
+        restored.addAll(ledger.entries().keySet());
+        finalDurability.restored(ledger);
+        Bukkit.getPluginManager().registerEvents(this, plugin);
+    }
+    private static ChunkKey rowKey(Map<?, ?> row) {
+        return new ChunkKey(UUID.fromString(row.get("world").toString()), ((Number) row.get("x")).intValue(), ((Number) row.get("z")).intValue());
+    }
+    private static ChunkKey key(Chunk chunk) { return new ChunkKey(chunk.getWorld().getUID(), chunk.getX(), chunk.getZ()); }
+    /** Used by core cleanup even when BlueMap is absent or disabled. */
+    public static void clearMetadata(Chunk chunk, JavaPlugin plugin) {
+        chunk.getPersistentDataContainer().remove(new NamespacedKey(plugin, "bluemap_revision"));
+    }
+    @Override public void chunkUpdated(Chunk chunk) {
+        ChunkKey key = key(chunk);
+        if (!settings.get().blueMap && !ledger.entries().containsKey(key)) return;
+        readable.remove(key); purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.remove(key); proofErrors.remove(key);
+        regionGate.changed(key.region(), System.currentTimeMillis());
+        if (ledger.dirty(key) || durabilityRequired.contains(key)) persist(Set.of(key), true); // Before editing the world.
+        chunk.getPersistentDataContainer().remove(revisionKey);
+    }
+    @Override public void chunkCompleted(Chunk chunk) {
+        chunkCompleted(chunk, !chunk.getPersistentDataContainer().has(seasonKey));
+    }
+    @Override public void chunkCompleted(Chunk chunk, boolean cleanup) {
+        ChunkKey key = key(chunk); RenderLedger.Entry entry = ledger.entries().get(key);
+        if (entry == null) { if (cleanup) clearMetadata(chunk, plugin); return; }
+        restored.remove(key); proofErrors.remove(key);
+        boolean deletion = deleted.remove(key);
+        if (!entry.token().isEmpty() && (entry.cleanup() != cleanup || deletion)) {
+            readable.remove(key); purges.remove(key); purgeLoaded.remove(key);
+            ledger.dirty(key); entry = ledger.entries().get(key);
+        }
+        if (entry.token().isEmpty() || entry.token().equals("legacy")) {
+            if (entry.token().equals("legacy")) ledger.dirty(key);
+            ledger.complete(key, UUID.randomUUID().toString()); ledger.cleanup(key, cleanup);
+            regionGate.changed(key.region(), System.currentTimeMillis());
+            folders.putIfAbsent(key, sourceFolder(chunk.getWorld()));
+            boolean force = finalDurability.forceBeforeMarker(key);
+            try { persist(Set.of(key), force); }
+            catch (UncheckedIOException failure) { durabilityRequired.add(key); throw failure; }
+            if (!force) finalDurability.appendedFinal(key, Bukkit.getCurrentTick());
+        }
+        if (durabilityRequired.contains(key)) persist(Set.of(key), true);
+        entry = ledger.entries().get(key);
+        if (!entry.token().equals(readable.get(key)))
+            chunk.getPersistentDataContainer().set(revisionKey, PersistentDataType.STRING, ledger.entries().get(key).token());
+    }
+    private static Path fallbackFolder(World world) {
+        return world.getWorldPath().toAbsolutePath().normalize();
+    }
+    private Path sourceFolder(World world){Path folder=mappedFolders.get(world.getUID());return folder==null?fallbackFolder(world):folder;}
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void loaded(ChunkLoadEvent event) {
+        Chunk chunk = event.getChunk(); ChunkKey key = key(chunk);
+        Purge purge = purges.get(key);
+        if (purge != null && purge.token.equals(chunk.getPersistentDataContainer().get(revisionKey, PersistentDataType.STRING))) {
+            chunk.getPersistentDataContainer().remove(revisionKey); purgeLoaded.add(key);purgeAwaiting(key);
+        } else if (!ledger.entries().containsKey(key)) chunk.getPersistentDataContainer().remove(revisionKey);
+    }
+    @Override public void tick() {
+        tick(false);
+    }
+    @Override public void maintain() {
+        tick(true);
+    }
+    private void tick(boolean maintenanceOnly) {
+        if (closed) return;
+        long now = System.currentTimeMillis();
+        if (!durabilityRequired.isEmpty()) persist(new ArrayList<>(durabilityRequired), true);
+        persist(finalDurability.due(Bukkit.getCurrentTick(), 128), true);
+        Optional<BlueMapAPI> instance = BlueMapAPI.getInstance();
+        if (instance.isPresent() && (mappedApi != instance.get() || now - lastWorldRefresh >= 1000)) {
+            lastWorldRefresh = now; mappedWorlds.clear();
+            BlueMapAPI api = instance.get();
+            if (mappedApi != api) { detachColors(); colorTargetsStale = true; }
+            mappedApi = api;
+            Set<UUID> ids = new LinkedHashSet<>(); Bukkit.getWorlds().forEach(world -> ids.add(world.getUID()));
+            ids.addAll(ledger.worlds());
+            for (UUID id : ids) {
+                World world = Bukkit.getWorld(id);
+                if (world != null) api.getWorld(world).ifPresent(mapped -> mappedWorlds.put(id, mapped));
+            }
+            knownVisualMaps.clear(); visualMapsConfirmed = true;
+            mappedWorlds.forEach((id, world) -> world.getMaps().forEach(map -> knownVisualMaps.put(map.getId(), id)));
+            Map<UUID, Path> worldFolders = new HashMap<>();
+            mappedWorlds.forEach((id, world) -> worldFolders.put(id, world.getSaveFolder().toAbsolutePath().normalize()));
+            Set<UUID> changedFolders=new HashSet<>();worldFolders.forEach((id,folder)->{if(!folder.equals(mappedFolders.get(id)))changedFolders.add(id);});
+            mappedFolders.keySet().retainAll(worldFolders.keySet());mappedFolders.putAll(worldFolders);
+            if(!changedFolders.isEmpty())for(Region region:ledger.pendingRegions())if(changedFolders.contains(region.world())){
+                Path folder=worldFolders.get(region.world());
+                ledger.bindSourceFolder(region,folder,folders,checkpointDirty);
+            }
+        }
+        if (instance.isEmpty()) { mappedWorlds.clear();mappedFolders.clear(); mappedApi = null; detachColors(); }
+        SeasonalVisualState colorState = settings.get().blueMap ? visualSource.get() : null;
+        if (instance.isPresent() && ((!maintenanceOnly && colorTargetsStale) || !Objects.equals(colorState, lastVisualState) || now - lastColorRefresh >= 1000)) {
+            lastVisualState = colorState; lastColorRefresh = now; refreshColors(colorState, !maintenanceOnly);
+            colorTargetsStale = maintenanceOnly;
+        }
+        if (maintenanceOnly) {
+            brief = detail = "paused; render requests retained" + (colorFailure == null ? "" : "; seasonal colours unavailable: " + colorFailure);
+            return;
+        }
+        Map<UUID, BlueMapWorld> worlds = mappedWorlds;
+        Set<ChunkKey> newlySaved = new LinkedHashSet<>();
+        if (checking != null && checking.isDone()) {
+            for (Proof proof : checking.join()) {
+                ChunkKey key = proof.revision.chunk();
+                if (!proof.source.equals(folders.get(key))) continue;
+                if (proof.error != null) { proofErrors.put(key, proof.error); continue; }
+                proofErrors.remove(key);
+                if (proof.observationOnly) continue;
+                if (!proof.regionMembers.isEmpty()) {
+                    Region region = key.region(); World world = Bukkit.getWorld(key.world());
+                    if (world == null || hasLoadedChunk(world, region) || !deletionStaging.add(region)) continue;
+                    deletionBatches.addLast(new DeletionBatch(region, new ArrayDeque<>(proof.regionMembers), proof.source)); continue;
+                }
+                if (proof.absent) {
+                    if (deletionStaging.contains(key.region())) continue;
+                    World world = Bukkit.getWorld(key.world());
+                    if (world == null || world.isChunkLoaded(key.x(), key.z())) continue;
+                    RenderLedger.Entry entry = ledger.entries().get(key); Purge purge = purges.get(key);
+                    if (proof.purge) {
+                        if (purge == null || !purge.token.equals(proof.revision.token())) continue;
+                        if (entry != null && !entry.token().equals(proof.revision.token())) continue;
+                    } else if (!ledger.unchanged(proof.revision)
+                            || !RenderLedger.sourceDeletionAllowed(restored.contains(key), proof.revision.token().equals(readable.get(key)), false)) continue;
+                    boolean cleanup = entry != null ? entry.cleanup() : purge.cleanup;
+                    if (!ledger.replaceWithDeletion(proof.revision, UUID.randomUUID().toString(), cleanup)) continue;
+                    regionGate.changed(key.region(), now);
+                    purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.add(key);
+                    readable.put(key, ledger.entries().get(key).token()); newlySaved.add(key);
+                    continue;
+                }
+                if (proof.purge) {
+                    Purge purge = purges.get(key);
+                    if (purge != null && purge.token.equals(proof.revision.token())) {
+                        purges.remove(key); purgeLoaded.remove(key); if (!ledger.entries().containsKey(key)) folders.remove(key); checkpointDirty.add(key);
+                    }
+                } else if (ledger.matches(proof.revision)) {
+                    readable.put(key, proof.revision.token()); newlySaved.add(key);
+                    // Cleanup may finish its metadata purge while rendering is disabled or unavailable.
+                    // The saved proof is persisted separately and survives removing the temporary token.
+                    if (ledger.entries().get(key).cleanup() && !deleted.contains(key)) purges.putIfAbsent(key, new Purge(proof.revision.token(), true));
+                }
+            }
+            checking = null;
+        }
+        int deletionBudget = Math.max(0, 128 - newlySaved.size());
+        while (deletionBudget > 0 && !deletionBatches.isEmpty()) {
+            DeletionBatch batch = deletionBatches.peekFirst(); World world = Bukkit.getWorld(batch.region.world());
+            if (world == null || hasLoadedChunk(world, batch.region) || (!batch.remaining.isEmpty() && !batch.source.equals(folders.get(batch.remaining.peekFirst().chunk())))) {
+                deletionBatches.removeFirst(); deletionStaging.remove(batch.region); continue;
+            }
+            while (deletionBudget > 0 && !batch.remaining.isEmpty()) {
+                deletionBudget--; Revision previous = batch.remaining.removeFirst(); ChunkKey key = previous.chunk();
+                RenderLedger.Entry entry = ledger.entries().get(key);
+                if (entry == null || !ledger.unchanged(previous) || deleted.contains(key)
+                        || !RenderLedger.sourceDeletionAllowed(restored.contains(key), entry.token().equals(readable.get(key)), world.isChunkLoaded(key.x(), key.z()))) continue;
+                if (!ledger.replaceWithDeletion(previous, UUID.randomUUID().toString(), entry.cleanup())) continue;
+                regionGate.changed(key.region(), now);
+                purges.remove(key); purgeLoaded.remove(key); restored.remove(key); deleted.add(key); proofErrors.remove(key);
+                readable.put(key, ledger.entries().get(key).token()); newlySaved.add(key);
+            }
+            if (batch.remaining.isEmpty()) { deletionBatches.removeFirst(); deletionStaging.remove(batch.region); }
+        }
+        // One forced append for the bounded proof batch, before any temporary token is purged.
+        persist(newlySaved, true);
+        try {
+            if (instance.isPresent() && settings.get().blueMap) {
+                RenderManager current = instance.get().getRenderManager();
+                if (manager != current) { discardFlights(); manager = current; bridge = null; }
+                if (bridge == null) bridge = new BlueMapRenderBridge(manager);
+                boolean inspectScheduler = now - lastFlightInspection >= 1000;
+                if (inspectScheduler) lastFlightInspection = now;
+                for (var iterator = flights.entrySet().iterator(); iterator.hasNext();) {
+                    var flight = iterator.next();
+                    if (flight.getValue().ticket.finished()) {
+                        if (flight.getValue().ticket.successful()) {
+                            lastFailure = null;
+                            for (Revision revision : flight.getValue().revisions)
+                                if (ledger.acknowledge(revision, flight.getKey())) checkpointDirty.add(revision.chunk());
+                            if (!unavailableColors.contains(flight.getKey())) visualQueue.acknowledge(flight.getKey(), flight.getValue().palette, flight.getValue().regions);
+                        } else lastFailure = flight.getKey() + ": " + flight.getValue().ticket.failure();
+                        iterator.remove();
+                    } else if (inspectScheduler && !bridge.scheduled(flight.getValue().ticket)) {
+                        flight.getValue().ticket.cancel(); lastFailure = flight.getKey() + ": render task was removed; retry pending"; iterator.remove();
+                    }
+                }
+                if (now - lastRetire >= 1000) {
+                    lastRetire = now;
+                    Map<UUID, List<String>> mapIds = new HashMap<>();
+                    worlds.forEach((id, world) -> mapIds.put(id, world.getMaps().stream().map(BlueMapMap::getId).toList()));
+                    for(Region region:ledger.pendingRegions()){
+                        if(deletionStaging.contains(region))continue;
+                        List<String> ids=mapIds.get(region.world());if(ids==null||!ledger.mayRetire(region,ids))continue;
+                        for(var member:new ArrayList<>(ledger.members(region))){
+                        ChunkKey key=member.chunk();
+                        RenderLedger.Entry entry = ledger.entries().get(key);
+                        if (ledger.retire(key, ids)) {
+                            if (!deleted.contains(key) && !entry.token().equals("legacy") && !entry.cleanup()) purges.put(key, new Purge(entry.token(), false));
+                            deleted.remove(key); restored.remove(key); proofErrors.remove(key);
+                            if (!purges.containsKey(key)) folders.remove(key);
+                            readable.remove(key); checkpointDirty.add(key);
+                        }
+                        }
+                    }
+                }
+            } else {
+                discardFlights(); manager = null; bridge = null;
+            }
+        } catch (ReflectiveOperationException | IOException | RuntimeException failure) { lastFailure = "cannot schedule render: " + failure.getMessage(); }
+        // Lost receipts safely replay renders. Keep ordinary checkpoint work bounded per tick.
+        persist(checkpointDirty.stream().limit(32).toList(), false);
+        if (compacting != null && compacting.isCompletedExceptionally()) {
+            detail = "requests retained; snapshot retry pending"; compacting = null;
+        }
+        if ((compacting == null || compacting.isDone()) && (journal.changesSinceSnapshot() >= 4096 || now - lastCompact >= 60_000)) {
+            lastCompact = now; compacting = journal.compactAsync(persistence);
+        }
+        purgeChunks();
+        if (checking == null && now - lastProbe >= 1000) {
+            lastProbe = now;
+            List<Probe> probes = new ArrayList<>();
+            if(ledger.tracksSources(folders,restored,readable,deleted)){
+                int regionBudget=16;Map<UUID,Set<Region>> loaded=new HashMap<>();
+                List<Region> pending=ledger.pendingRegions();
+                for(int inspected=0;inspected<pending.size();inspected++){
+                    if(regionBudget==0)break;
+                    Region region=pending.get(Math.floorMod(regionProbeCursor++,pending.size()));
+                    if(deletionStaging.contains(region)||!ledger.sourceCandidate(region))continue;
+                    World world=Bukkit.getWorld(region.world());if(world==null)continue;
+                    Set<Region> visible=loaded.computeIfAbsent(region.world(),ignored->loadedRegions(world));
+                    if(visible.contains(region))continue;
+                    Path source=null;boolean mixed=false;List<Revision> members=new ArrayList<>();
+                    for(var entry:ledger.members(region)){
+                        if(deleted.contains(entry.chunk()))continue;
+                        Path folder=folders.get(entry.chunk());
+                        if(folder==null||source!=null&&!source.equals(folder)){mixed=true;break;}
+                        source=folder;members.add(new Revision(entry.chunk(),entry.token()));
+                    }
+                    if(mixed||members.isEmpty())continue;
+                    probes.add(new Probe(members.getFirst(),source,false,true,false,List.copyOf(members)));regionBudget--;
+                }
+            }else{
+            Map<Region, List<Revision>> candidateRegions = new LinkedHashMap<>(); Set<Region> excluded = new HashSet<>(deletionStaging);
+            for (var row : ledger.entries().entrySet()) {
+                ChunkKey key = row.getKey(); RenderLedger.Entry entry = row.getValue();
+                if (deleted.contains(key)) continue;
+                if (!folders.containsKey(key) || !RenderLedger.sourceDeletionAllowed(restored.contains(key), entry.token().equals(readable.get(key)), false)) {
+                    excluded.add(key.region()); continue;
+                }
+                candidateRegions.computeIfAbsent(key.region(), ignored -> new ArrayList<>()).add(new Revision(key, entry.token()));
+            }
+            int regionBudget = 16;
+            for (var region : candidateRegions.entrySet()) {
+                if (regionBudget == 0) break;
+                World world = Bukkit.getWorld(region.getKey().world());
+                if (excluded.contains(region.getKey()) || world == null || hasLoadedChunk(world, region.getKey())) continue;
+                Revision first = region.getValue().getFirst();
+                probes.add(new Probe(first, folders.get(first.chunk()), false, true, false, List.copyOf(region.getValue()))); regionBudget--;
+            }
+            }
+            for (var entry:ledger.probes(128)) {
+                ChunkKey key = entry.chunk();
+                World world = Bukkit.getWorld(key.world());
+                boolean absence = !deleted.contains(key) && world != null && RenderLedger.sourceDeletionAllowed(restored.contains(key), entry.token().equals(readable.get(key)), world.isChunkLoaded(key.x(), key.z()));
+                if (folders.containsKey(key) && ((!entry.token().isEmpty() && !entry.token().equals(readable.get(key))) || absence))
+                    probes.add(new Probe(new Revision(key, entry.token()), folders.get(key), false, absence, !entry.token().equals(readable.get(key))));
+                else if (entry.token().equals("legacy")) { readable.put(key, "legacy"); checkpointDirty.add(key); }
+            }
+            List<Map.Entry<ChunkKey,Purge>> purgeCandidates;
+            var purgeWork=purgeWork();
+            if(purgeWork!=null)purgeCandidates=purgeWork.probes(128,id->Bukkit.getWorld(id)!=null);
+            else{
+                List<ChunkKey> purgeKeys = new ArrayList<>(purges.keySet());purgeCandidates=new ArrayList<>();
+                for(int n=0;n<Math.min(128,purgeKeys.size());n++){ChunkKey key=purgeKeys.get(Math.floorMod(purgeCursor++,purgeKeys.size()));purgeCandidates.add(Map.entry(key,purges.get(key)));}
+            }
+            for(var candidate:purgeCandidates){
+                ChunkKey key = candidate.getKey();
+                World world = Bukkit.getWorld(key.world()); boolean absence = world != null && !world.isChunkLoaded(key.x(), key.z());
+                if ((purgeLoaded.contains(key) || absence) && folders.containsKey(key)) probes.add(new Probe(new Revision(key, candidate.getValue().token), folders.get(key), true, absence, true));
+            }
+            checking = CompletableFuture.supplyAsync(() -> {
+                List<Proof> proven = new ArrayList<>();
+                for (Probe probe : probes) {
+                    ChunkKey key = probe.revision.chunk();
+                    try {
+                        if (!probe.regionMembers.isEmpty()) {
+                            if (SavedChunkRevision.regionAbsent(probe.folder, key.region().x(), key.region().z()))
+                                proven.add(new Proof(probe.revision, false, true, null, false, probe.regionMembers, probe.folder));
+                            continue;
+                        }
+                        if (probe.absenceAllowed && SavedChunkRevision.sourceAbsent(probe.folder, key.x(), key.z())) {
+                            proven.add(new Proof(probe.revision, probe.purge, true, null, false, List.of(), probe.folder)); continue;
+                        }
+                        if (!probe.verifyMarker || probe.revision.token().isEmpty()) {
+                            // Saved revisions only need the cheap disappearance check, not repeated NBT decompression.
+                            proven.add(new Proof(probe.revision, probe.purge, false, null, true, List.of(), probe.folder)); continue;
+                        }
+                        boolean provenSaved = probe.purge
+                                ? SavedChunkRevision.purged(probe.folder, key.x(), key.z(), revisionKey.toString(), probe.revision.token())
+                                : SavedChunkRevision.matches(probe.folder, key.x(), key.z(), revisionKey.toString(), probe.revision.token());
+                        proven.add(new Proof(probe.revision, probe.purge, false, null, !provenSaved, List.of(), probe.folder));
+                    } catch (IOException failure) { proven.add(new Proof(probe.revision, probe.purge, false, failure.getMessage(), false, List.of(), probe.folder)); }
+                }
+                return proven;
+            }, reader);
+        }
+        if (now - lastStatus >= 1000) { lastStatus = now; refreshStatus(instance); }
+        if (!settings.get().blueMap || instance.isEmpty()) return;
+        if (bridge == null || now - lastFlush < settings.get().blueMapSeconds * 1000L || now - lastRenderAttempt < 1000) return;
+        lastRenderAttempt = now;
+        try {
+            int remaining = settings.get().blueMapRegions; boolean submitted = false;
+            long quietMillis = settings.get().blueMapSeconds * 1000L;
+            List<Region> pendingRegions=ledger.pendingRegions();Set<Region> pendingSet=new HashSet<>(pendingRegions);
+            regionGate.retain(pendingSet);regionWaits.keySet().retainAll(pendingSet);
+            for (BlueMapWorld world : worlds.values()) for (BlueMapMap map : world.getMaps()) {
+                if (remaining == 0 || flights.containsKey(map.getId()) || map.isFrozen()) continue;
+                Map<Region, List<Revision>> regions = new LinkedHashMap<>();
+                Map<Region,RegionRenderGate.Batch> batches=new HashMap<>();
+                for (Region region : pendingRegions) {
+                    if (regions.size() >= remaining) break;
+                    if (world != worlds.get(region.world())||!ledger.needs(region,map.getId())) continue;
+                    var prepared=regionGate.prepare(region,ledger,readable,deleted,regionReadiness,deletionStaging,now,quietMillis,true);
+                    regionWaits.put(region,prepared.state());
+                    if(prepared.state()==RegionRenderGate.State.READY){
+                        var batch=prepared.batch();var needed=batch.revisions().stream().filter(revision->ledger.needs(revision,map.getId())).toList();
+                        if(!needed.isEmpty()){regions.put(region,needed);batches.put(region,batch);}
+                    }
+                }
+                for (Vector2i coordinate : unavailableColors.contains(map.getId()) ? List.<Vector2i>of() : visualQueue.candidates(map.getId(), 128)) {
+                    if (regions.size() >= remaining) break;
+                    UUID worldId = worlds.entrySet().stream().filter(entry -> entry.getValue() == world).map(Map.Entry::getKey).findFirst().orElseThrow();
+                    Region region = new Region(worldId, coordinate.getX(), coordinate.getY());
+                    if (regions.containsKey(region)) continue;
+                    var prepared=regionGate.prepare(region,ledger,readable,deleted,regionReadiness,deletionStaging,now,quietMillis,ledger.needs(region,map.getId()));
+                    if(prepared.state()==RegionRenderGate.State.READY){
+                        var batch=prepared.batch();batches.put(region,batch);
+                        regions.put(region,batch.revisions().stream().filter(revision->ledger.needs(revision,map.getId())).toList());
+                    }
+                }
+                if (regions.isEmpty()) continue;
+                // Recheck the migration predicate immediately before entering the native scheduler.
+                // A callback can discover new terrain while candidates are being collected.
+                regions.keySet().removeIf(region -> regionGate.state(batches.get(region),regionReadiness,deletionStaging,now,quietMillis)!=RegionRenderGate.State.READY);
+                if (regions.isEmpty()) continue;
+                List<Vector2i> fullRegions=new ArrayList<>(),changedChunks=new ArrayList<>();
+                for(var row:regions.entrySet()){
+                    Vector2i coordinate=new Vector2i(row.getKey().x(),row.getKey().z());
+                    if(row.getValue().isEmpty()||row.getValue().size()>=256||row.getValue().stream().anyMatch(revision->deleted.contains(revision.chunk()))||visualQueue.fullRenderRequired(map.getId(),coordinate))fullRegions.add(coordinate);
+                    else for(Revision revision:row.getValue())changedChunks.add(new Vector2i(revision.chunk().x(),revision.chunk().z()));
+                }
+                BlueMapRenderBridge.Ticket ticket = bridge.submit(map,fullRegions,changedChunks);
+                if (ticket != null) {
+                    regionRendersScheduled += regions.size();
+                    flights.put(map.getId(), new Flight(ticket, regions.values().stream().flatMap(Collection::stream).toList(),
+                            visualQueue.receiptToken(map.getId()), regions.keySet().stream().map(region -> new Vector2i(region.x(), region.z())).toList())); remaining -= regions.size(); submitted = true;
+                    regions.keySet().forEach(region -> { if (batches.containsKey(region)) regionGate.submitted(batches.get(region), now); });
+                }
+            }
+            if (submitted) lastFlush = now;
+            refreshStatus(instance);
+        } catch (ReflectiveOperationException | RuntimeException failure) { lastFailure = "cannot schedule render: " + failure.getMessage(); refreshStatus(instance); }
+    }
+    private void purgeChunks() {
+        int budget = settings.get().perTick;
+        var queue=purgeWork();
+        if(queue!=null){
+            while(budget>0&&loading.size()<settings.get().concurrency){
+                var row=queue.nextReady(id->Bukkit.getWorld(id)!=null);if(row==null)break;
+                ChunkKey key=row.getKey();queue.awaiting(key);
+                if(purgeLoaded.contains(key)||loading.contains(key))continue;
+                World world=Bukkit.getWorld(key.world());if(world==null){queue.retry(key);break;}
+                budget--;requestPurge(key,row.getValue(),world);
+            }
+            return;
+        }
+        for (var row : purges.entrySet()) {
+            if (budget == 0 || loading.size() >= settings.get().concurrency) break;
+            ChunkKey key = row.getKey();Purge target=row.getValue();if (purgeLoaded.contains(key) || loading.contains(key)) continue;
+            World world = Bukkit.getWorld(key.world()); if (world == null) continue;
+            budget--;requestPurge(key,target,world);
+        }
+    }
+    private void requestPurge(ChunkKey key,Purge target,World world){
+            boolean wasLoaded = world.isChunkLoaded(key.x(), key.z()); loading.add(key);
+            try{
+            world.getChunkAtAsync(key.x(), key.z(), false).whenComplete((chunk, failure) -> {
+                if (closed) return;
+                Runnable completion = () -> {
+                    loading.remove(key); if (closed) return;
+                    if(failure!=null||chunk==null||Bukkit.getWorld(key.world())!=world||!target.equals(purges.get(key))){retryPurge(key);return;}
+                    if (target.token.equals(chunk.getPersistentDataContainer().get(revisionKey, PersistentDataType.STRING)))
+                        chunk.getPersistentDataContainer().remove(revisionKey);
+                    purgeLoaded.add(key);purgeAwaiting(key);
+                    if (!wasLoaded && !chunk.isForceLoaded() && chunk.getPluginChunkTickets().isEmpty()
+                            && chunk.getPlayersSeeingChunk().isEmpty()) world.unloadChunkRequest(key.x(), key.z());
+                };
+                if (Bukkit.isPrimaryThread()) completion.run();
+                else Bukkit.getScheduler().runTask(plugin, completion);
+            });
+            }catch(RuntimeException|Error failure){loading.remove(key);retryPurge(key);throw failure;}
+    }
+    private static String journalKey(ChunkKey key) { return key.world() + "/" + key.x() + "/" + key.z(); }
+    private static boolean hasLoadedChunk(World world, Region region) {
+        for (Chunk chunk : world.getLoadedChunks()) if (Math.floorDiv(chunk.getX(), 32) == region.x() && Math.floorDiv(chunk.getZ(), 32) == region.z()) return true;
+        return false;
+    }
+    private static Set<Region> loadedRegions(World world){
+        Set<Region> regions=new HashSet<>();UUID id=world.getUID();
+        for(Chunk chunk:world.getLoadedChunks())regions.add(new Region(id,Math.floorDiv(chunk.getX(),32),Math.floorDiv(chunk.getZ(),32)));
+        return regions;
+    }
+    private void discardFlights() {
+        if (bridge != null) flights.values().forEach(flight -> bridge.cancel(flight.ticket));
+        flights.clear();
+    }
+    private void refreshStatus(Optional<BlueMapAPI> instance) {
+        int transitions = 0, awaitingSave = 0, ready = 0, sourceDeletions = 0, unmapped = 0, frozen = 0;
+        Set<Region> pendingRegions = new HashSet<>(ledger.pendingRegions());
+        regionWaits.keySet().retainAll(pendingRegions);
+        Set<Region> allRegions=new HashSet<>(pendingRegions);boolean discovered=true;
+        boolean restoring=lastVisualState==null||lastVisualState.eligibleWorlds().isEmpty();
+        for(String map:mappedMapIds()){
+            UUID world=knownVisualMaps.get(map);
+            if(world==null){discovered=false;continue;}
+            discovered&=visualQueue.appendPendingRegions(map,world,restoring,allRegions);
+        }
+        displayPendingRegions=discovered?allRegions.size():-1;
+        Map<UUID, Boolean> configured = new HashMap<>();
+        for (var world : mappedWorlds.entrySet()) {
+            Collection<BlueMapMap> maps = world.getValue().getMaps(); configured.put(world.getKey(), !maps.isEmpty());
+            for (BlueMapMap map : maps) if (map.isFrozen()) frozen++;
+        }
+        if(ledger.tracksReadable(readable)&&ledger.tracksDeletions(deleted)){
+            Set<UUID> configuredWorlds=new HashSet<>();configured.forEach((world,present)->{if(present)configuredWorlds.add(world);});
+            var counts=ledger.counts(configuredWorlds);transitions=counts.transitions();awaitingSave=counts.awaitingSave();ready=counts.ready();sourceDeletions=counts.sourceDeletions();unmapped=counts.unmapped();
+        }else for (var row : ledger.entries().entrySet()) {
+            ChunkKey key = row.getKey(); RenderLedger.Entry entry = row.getValue();
+            if (entry.token().isEmpty()) transitions++;
+            else if (!entry.token().equals(readable.get(key))) awaitingSave++;
+            else if (deleted.contains(key)) sourceDeletions++;
+            else ready++;
+            if (!configured.getOrDefault(key.world(), false)) unmapped++;
+        }
+        StringBuilder status = new StringBuilder(settings.get().blueMap ? (instance.isPresent() ? "connected" : "waiting for BlueMap") : "disabled; render requests retained");
+        status.append("; ").append(flights.size()).append(" render batches; ").append(purges.size()).append(" metadata purges");
+        status.append("; region renders scheduled this run: ").append(regionRendersScheduled);
+        status.append("; palette regions pending: ").append(visiblePalettePending());
+        if (colorFailure != null) status.append("; seasonal colours unavailable: ").append(colorFailure);
+        if (visualQueue.failure() != null) status.append("; ").append(visualQueue.failure());
+        if (transitions > 0) status.append("; waiting for completed transitions: ").append(transitions).append(" chunks");
+        if (awaitingSave > 0) status.append("; waiting for saved final revisions/recovery: ").append(awaitingSave).append(" chunks");
+        if (sourceDeletions > 0) status.append("; removed-source map cleanup queued: ").append(sourceDeletions).append(" chunks");
+        long migratingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.MIGRATING).count();
+        long savingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.SAVING).count();
+        long coalescingRegions = regionWaits.values().stream().filter(state -> state == RegionRenderGate.State.COALESCING).count();
+        if (migratingRegions > 0) status.append("; regions waiting for world edits: ").append(migratingRegions);
+        if (savingRegions > 0) status.append("; regions waiting for final saves: ").append(savingRegions);
+        if (coalescingRegions > 0) status.append("; regions coalescing recent edits: ").append(coalescingRegions);
+        if (!deletionStaging.isEmpty()) status.append("; recovering removed regions: ").append(deletionStaging.size());
+        if (ready > 0 && flights.isEmpty()) status.append("; saved revisions queued for next render batch: ").append(ready).append(" chunks");
+        if (unmapped > 0 && instance.isPresent()) status.append("; waiting for configured map/world: ").append(unmapped).append(" chunks");
+        if (frozen > 0) status.append("; frozen maps: ").append(frozen);
+        if (manager != null && !manager.isRunning()) status.append("; renderer stopped");
+        if (!proofErrors.isEmpty()) status.append("; unreadable source: ").append(proofErrors.values().iterator().next());
+        if (lastFailure != null) status.append("; retrying: ").append(lastFailure);
+        detail = status.toString();
+        String reason=!proofErrors.isEmpty()?"source read error":lastFailure!=null?"retrying after an error"
+            :colorFailure!=null||visualQueue.failure()!=null?"seasonal colors need attention"
+            :frozen>0?"maps frozen":manager!=null&&!manager.isRunning()?"renderer stopped":unmapped>0&&instance.isPresent()?"map/world not configured"
+            :savingRegions>0?"waiting for saves":migratingRegions>0?"waiting for terrain":coalescingRegions>0?"combining updates":null;
+        brief=(!settings.get().blueMap?"disabled":instance.isEmpty()?"waiting for BlueMap":pending()==0?"up to date":"updating")
+            +(reason==null?"":"; "+reason);
+    }
+    private byte[] encode(ChunkKey key) throws IOException {
+        RenderLedger.Entry entry = ledger.entries().get(key); Purge purge = purges.get(key);
+        if (entry == null && purge == null) return new byte[0];
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream output = new DataOutputStream(bytes)) {
+            output.writeBoolean(entry != null);
+            if (entry != null) {
+                output.writeUTF(entry.token()); output.writeBoolean(entry.cleanup()); output.writeBoolean(entry.token().equals(readable.get(key)));
+                Set<String> acknowledgements = entry.acknowledged(); output.writeInt(acknowledgements.size());
+                for (String map : acknowledgements) output.writeUTF(map);
+            }
+            output.writeBoolean(purge != null);
+            if (purge != null) { output.writeUTF(purge.token); output.writeBoolean(purge.cleanup); }
+            output.writeUTF(folders.containsKey(key) ? folders.get(key).toString() : "");
+            output.writeBoolean(deleted.contains(key));
+        }
+        return bytes.toByteArray();
+    }
+    private void restoreJournal()throws IOException{
+        var symbols=new RenderRecoverySymbols();
+        journal.readRecords((id,input)->{if(!id.equals("__format"))restore(id,input,symbols);});
+    }
+    private void restore(String id,DataInputStream input,RenderRecoverySymbols symbols)throws IOException{
+        ChunkKey key=symbols.key(id);
+        if (input.readBoolean()) {
+            String token = input.readUTF(); boolean cleanup = input.readBoolean(), saved = input.readBoolean();
+            int count = input.readInt(); if (count < 0 || count > 10_000) throw new IOException("Invalid map receipt count");
+            List<String> maps = count==0?List.of():new ArrayList<>(count); for (int n = 0; n < count; n++) maps.add(symbols.map(input.readUTF()));
+            ledger.restore(key, token, maps); ledger.cleanup(key, cleanup); if (saved) readable.put(key, token);
+        }
+        if (input.readBoolean()) purges.put(key, new Purge(input.readUTF(), input.readBoolean()));
+        String folder = input.readUTF(); if (!folder.isEmpty()) folders.put(key,symbols.folder(folder));
+        if (input.available() > 0 && input.readBoolean()) deleted.add(key);
+        if (input.read() != -1) throw new IOException("Trailing BlueMap state data");
+    }
+    private void persist(Collection<ChunkKey> keys, boolean force) {
+        if (keys.isEmpty()) return;
+        try {
+            Map<String, byte[]> changes = new LinkedHashMap<>(); for (ChunkKey key : keys) changes.put(journalKey(key), encode(key));
+            journal.putAll(changes, force);
+            for(ChunkKey key:keys){checkpointDirty.remove(key);durabilityRequired.remove(key);}
+            if (force) finalDurability.forced(ledger, keys);
+        } catch (IOException failure) {
+            checkpointDirty.addAll(keys); if (force) durabilityRequired.addAll(keys);
+            throw new UncheckedIOException("Cannot persist BlueMap requests", failure);
+        }
+    }
+    @Override public int cleanupPending() {
+        if(trackedPurges!=null&&trackedPurges==purges&&ledger.tracksReadable(readable))return cleanupPurges+ledger.cleanupPending()
+            +(settings.get().blueMap&&(lastVisualState==null||lastVisualState.eligibleWorlds().isEmpty())?visualQueue.restorationPending(mappedMapIds()):0);
+        Set<ChunkKey> keys = new HashSet<>(); purges.forEach((key, purge) -> { if (purge.cleanup) keys.add(key); });
+        ledger.entries().forEach((key, entry) -> { if (entry.cleanup() && !entry.token().equals(readable.get(key))) keys.add(key); });
+        return keys.size() + (settings.get().blueMap && (lastVisualState == null || lastVisualState.eligibleWorlds().isEmpty())
+                ? visualQueue.restorationPending(mappedMapIds()) : 0);
+    }
+    @Override public boolean isEnabled() { return settings.get().blueMap; }
+    @Override public void setRegionReadiness(RegionReadiness readiness) { regionReadiness = Objects.requireNonNull(readiness); }
+    @Override public boolean requiresRecovery(UUID world, int x, int z) {
+        return requiresRecovery(world, x, z, null);
+    }
+    @Override public boolean requiresRecovery(UUID world, int x, int z, String marker) {
+        ChunkKey key = new ChunkKey(world, x, z); RenderLedger.Entry entry = ledger.entries().get(key);
+        return ledger.requiresMarkerRecovery(key, marker, entry != null && entry.token().equals(readable.get(key)), deleted.contains(key), restored.contains(key));
+    }
+    @Override public void setVisuals(Supplier<SeasonalVisualState> visuals) { visualSource = Objects.requireNonNull(visuals); }
+    private void refreshColors(SeasonalVisualState state, boolean updateTargets) {
+        Set<String> retained = new HashSet<>();
+        for (var world : mappedWorlds.entrySet()) for (BlueMapMap map : world.getValue().getMaps()) {
+            retained.add(map.getId());
+            try {
+                Object nativeMap = BlueMapRenderBridge.nativeMap(map);
+                if ((state == null || !state.active(world.getKey())) && visualQueue.target(map.getId()).equals("vanilla") && !colors.containsKey(map.getId())) {
+                    unavailableColors.remove(map.getId()); unsupportedColorMaps.remove(map.getId()); continue;
+                }
+                if (state != null && state.active(world.getKey())) {
+                    if (unsupportedColorMaps.get(map.getId()) == nativeMap) { unavailableColors.add(map.getId()); continue; }
+                    if (colorMaps.get(map.getId()) != nativeMap) {
+                        BlueMapSeasonalColors old = colors.remove(map.getId()); if (old != null) old.close();
+                        try { colors.put(map.getId(), new BlueMapSeasonalColors(nativeMap, world.getKey())); colorMaps.put(map.getId(), nativeMap); }
+                        catch (ReflectiveOperationException | RuntimeException unsupported) { unsupportedColorMaps.put(map.getId(), nativeMap); throw unsupported; }
+                    }
+                    BlueMapSeasonalColors tint = colors.get(map.getId()); tint.update(state);
+                    if (tint.failure() != null) {
+                        colorFailure = tint.failure(); tint.close(); colors.remove(map.getId()); colorMaps.remove(map.getId());
+                        unsupportedColorMaps.put(map.getId(), nativeMap); unavailableColors.add(map.getId()); continue;
+                    }
+                } else {
+                    BlueMapSeasonalColors old = colors.remove(map.getId()); if (old != null) old.close(); colorMaps.remove(map.getId());
+                }
+                unavailableColors.remove(map.getId()); unsupportedColorMaps.remove(map.getId());
+                if (!updateTargets) continue;
+                String fingerprint = state == null ? "vanilla" : state.fingerprint(world.getKey());
+                Object nativeWorld = nativeMap.getClass().getMethod("getWorld").invoke(nativeMap);
+                var listRegions = nativeWorld.getClass().getMethod("listRegions");
+                visualQueue.target(map.getId(), fingerprint, state==null?List.of("vanilla"):state.fingerprintAliases(world.getKey()), () -> {
+                    @SuppressWarnings("unchecked") Collection<Vector2i> result = (Collection<Vector2i>) listRegions.invoke(nativeWorld); return result;
+                });
+            } catch (ReflectiveOperationException | RuntimeException failure) { colorFailure = failure.getMessage(); unavailableColors.add(map.getId()); }
+        }
+        for (String id : new ArrayList<>(colors.keySet())) if (!retained.contains(id)) { colors.remove(id).close(); colorMaps.remove(id); }
+        unavailableColors.retainAll(retained); unsupportedColorMaps.keySet().retainAll(retained);
+        if (unavailableColors.isEmpty()) colorFailure = null;
+        if (updateTargets) try { visualQueue.compact(); } catch (RuntimeException failure) { colorFailure = failure.getMessage(); }
+    }
+    private void detachColors() {
+        colors.values().forEach(BlueMapSeasonalColors::close); colors.clear(); colorMaps.clear(); unsupportedColorMaps.clear(); unavailableColors.clear();
+    }
+    private Set<String> mappedMapIds() {
+        if (mappedApi == null) {
+            // Until BlueMap confirms its configuration, recorded maps are unresolved.
+            // Once confirmed, retain only known active worlds during an API outage;
+            // a later configuration refresh can positively classify removed maps as dormant.
+            if (!visualMapsConfirmed) return visualQueue.recordedMaps();
+            Set<String> known = new LinkedHashSet<>();
+            knownVisualMaps.forEach((id, world) -> { if (Bukkit.getWorld(world) != null) known.add(id); });
+            return known;
+        }
+        Set<String> result = new LinkedHashSet<>();
+        mappedWorlds.values().forEach(world -> world.getMaps().forEach(map -> result.add(map.getId())));
+        return result;
+    }
+    private int visiblePalettePending() {
+        Set<String> maps = mappedMapIds();
+        return lastVisualState == null || lastVisualState.eligibleWorlds().isEmpty()
+                ? visualQueue.restorationPending(maps) : visualQueue.pending(maps);
+    }
+    @Override public int pending() { return ledger.regions() + visiblePalettePending(); }
+    @Override public int pendingRegions(){return displayPendingRegions;}
+    @Override public String status() { return detail; }
+    @Override public String summary() { return brief; }
+    @Override public void close() {
+        closed = true; HandlerList.unregisterAll(this); if (bridge != null) flights.values().forEach(flight -> bridge.cancel(flight.ticket));
+        detachColors();
+        reader.shutdownNow(); persist(new ArrayList<>(checkpointDirty), true);
+        try { visualQueue.close(); journal.close(); } catch (IOException failure) { throw new UncheckedIOException("Cannot close BlueMap journal", failure); }
+        finally { persistence.shutdown(); }
+    }
+}

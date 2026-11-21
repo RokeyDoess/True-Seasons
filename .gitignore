@@ -1,0 +1,15 @@
+/.gradle/
+/build/
+/run/
+/.idea/
+*.iml
+
+# Local server output and profiler captures
+/logs/
+*.log
+*.log.gz
+*.sparkprofile
+*.jfr
+*.hprof
+__pycache__/
+*.pyc

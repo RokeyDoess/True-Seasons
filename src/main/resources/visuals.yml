@@ -1,0 +1,43 @@
+# Seasonal grass and biome-tinted leaves, in game and on BlueMap.
+# Autumn trees use vanilla colored poplar leaf appearances; spruce stays unchanged.
+# Saved biome IDs and leaf blocks remain untouched.
+enabled: true
+foliage-updates:
+  # Shared limits for extra foliage refreshes across all players each tick.
+  # Dense chunks continue next tick; ordinary chunk delivery is unaffected.
+  max-chunks-per-tick: 64
+  max-states-per-tick: 8192
+transition:
+  # Real 24-hour days for whole trees to enter or leave autumn; 0 changes immediately.
+  # Grass/biome tints change with the season. Manual commands use final tree colors.
+  opening-days: 7
+autumn-trees:
+  # Client/render-only appearance. Saved leaves, decay and drops stay original.
+  # Birch participates; cherry always uses red. No resource pack required.
+  enabled: true
+families:
+  evergreen: [taiga, 'minecraft:grove']
+  dry: [savanna, desert, badlands]
+  lush: [jungle, swamp, mangrove]
+# Hex RGB grass / foliage, by season and family. Unmatched biomes use temperate.
+palettes:
+  temperate:
+    spring: ['83B957', '68AE48']
+    summer: ['73A64B', '4C913D']
+    autumn: ['9C9657', 'D98637']
+    winter: ['A2ADA0', '859687']
+  evergreen:
+    spring: ['729A68', '4E805D']
+    summer: ['678D60', '3E7150']
+    autumn: ['7D8961', '527151']
+    winter: ['8C9E95', '647E70']
+  dry:
+    spring: ['B5B769', 'A6A256']
+    summer: ['B3AA5B', '9C964D']
+    autumn: ['AAA166', 'A09958']
+    winter: ['AFAB88', '9A9875']
+  lush:
+    spring: ['65AD4C', '49A43F']
+    summer: ['55933F', '398B32']
+    autumn: ['789447', '77983F']
+    winter: ['8CA585', '779574']

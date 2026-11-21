@@ -1,9 +1,9 @@
 # True Seasons
 
-[![Latest release: v1.0.0](https://img.shields.io/badge/release-v1.0.0-brightgreen)](https://github.com/RokeyDoess/True-Seasons/releases/tag/v1.0.0)
-[![Minecraft: 26.3](https://img.shields.io/badge/Paper-26.3-brightgreen)](#install)
-[![Build](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml/badge.svg)](https://github.com/RokeyDoess/True-Seasons/actions/workflows/build.yml)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+[![Paper 26.3](https://img.shields.io/badge/Paper-26.3-21b8b6)](https://papermc.io/downloads/paper)
+[![Java 25](https://img.shields.io/badge/Java-25-orange)](https://docs.papermc.io/paper/getting-started/)
+[![Build](https://img.shields.io/github/actions/workflow/status/RokeyDoess/True-Seasons/build.yml?branch=main)](https://github.com/RokeyDoess/True-Seasons/actions)
+[![GPLv3](https://img.shields.io/badge/License-GPLv3-blue)](LICENSE)
 
 Seasonal landscapes, colorful autumn forests and winter snowstorms.
 
